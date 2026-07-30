@@ -109,8 +109,13 @@ Task cards should support drag and drop:
 The static prototype should also include an Add task button at the top of the board:
 
 - The button should open a smaller task creation window.
-- The form should include task title, project ID, project name, responsible row or role, column/status, due date, workflow stage, and details.
+- The form should include task title, project ID, project name, responsible row or role, responsible email, column/status, due date, workflow stage, details, file attachments, and an email notification option.
 - After a task is added, a smaller confirmation window should show the information that was added.
+- Double-clicking an existing task card should open a similar small edit window.
+- The edit window should allow changing task title, project ID, project name, responsible row or role, responsible email, column/status, due date, workflow stage, details, and attached file names.
+- The edit window should stay visible within the current board viewport without requiring page scrolling.
+- The user list should include `sebastian.stasica@die-tech.biz` for the prototype.
+- Email notification in the static prototype should prepare an email draft for the responsible person; SMTP sending can be added in the backend phase.
 
 Board filters:
 
@@ -298,6 +303,9 @@ Required fields:
 5. Project creation wireframe.
 6. First SQLite schema draft.
 7. Review notes before implementation starts.
+
+
+
 
 
 
