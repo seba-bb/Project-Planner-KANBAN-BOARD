@@ -219,6 +219,93 @@ def add_value(state_key: str, value: str, item_label: str) -> tuple[bool, str]:
     return True, f"Added {item_label.lower()}: {cleaned_value}."
 
 
+def add_task(
+    title: str,
+    project_id: str,
+    project: str,
+    owner: str,
+    status: str,
+    due: str,
+    stage: str,
+    description: str,
+) -> tuple[bool, str]:
+    cleaned_title = normalize_name(title)
+    cleaned_project = normalize_name(project)
+    cleaned_stage = normalize_name(stage)
+    cleaned_description = description.strip()
+
+    if not cleaned_title:
+        return False, "Task title is required."
+
+    if not cleaned_project:
+        return False, "Project name is required."
+
+    task = {
+        "title": cleaned_title,
+        "owner": owner,
+        "status": status,
+        "due": due,
+        "stage": cleaned_stage or "Not assigned",
+        "project_id": project_id,
+        "project": cleaned_project,
+        "description": cleaned_description or "No additional details provided.",
+    }
+    st.session_state.tasks.append(task)
+    st.session_state.last_added_task = task.copy()
+    return True, f"Added task: {cleaned_title}."
+
+
+@st.dialog("Add task")
+def add_task_dialog(project_ids: list[str], people: list[str], statuses: list[str]) -> None:
+    with st.form("add_task_dialog_form"):
+        task_title = st.text_input("Task title", placeholder="Prepare inspection report")
+        task_project_id = st.selectbox("Project ID", project_ids)
+        task_project = st.text_input("Project name", placeholder="NPI - Stamping Bracket")
+        task_owner = st.selectbox("Responsible row", people)
+        task_status = st.selectbox("Column/status", statuses)
+        task_due = st.date_input("Due date")
+        task_stage = st.text_input("Workflow stage", placeholder="Documentation Preparation")
+        task_description = st.text_area("Details", placeholder="Additional task information")
+        submitted = st.form_submit_button("Add task")
+
+    if submitted:
+        success, message = add_task(
+            task_title,
+            task_project_id,
+            task_project,
+            task_owner,
+            task_status,
+            task_due.isoformat(),
+            task_stage,
+            task_description,
+        )
+        if success:
+            st.session_state.show_added_task_dialog = True
+            st.rerun()
+        st.error(message)
+
+
+@st.dialog("Task added")
+def task_added_dialog() -> None:
+    task = st.session_state.get("last_added_task")
+    if not task:
+        st.write("Task was added.")
+    else:
+        st.write("The task was added to the board.")
+        st.markdown(f"**Task title:** {escape(task['title'])}")
+        st.markdown(f"**Project ID:** {escape(task['project_id'])}")
+        st.markdown(f"**Project name:** {escape(task['project'])}")
+        st.markdown(f"**Responsible row:** {escape(task['owner'])}")
+        st.markdown(f"**Column/status:** {escape(task['status'])}")
+        st.markdown(f"**Due date:** {escape(task['due'])}")
+        st.markdown(f"**Workflow stage:** {escape(task['stage'])}")
+        st.markdown(f"**Details:** {escape(task['description'])}")
+
+    if st.button("Close", key="close_added_task_dialog"):
+        st.session_state.show_added_task_dialog = False
+        st.rerun()
+
+
 def remove_people(people_to_remove: list[str]) -> tuple[bool, str]:
     if not people_to_remove:
         return False, "Select at least one row to remove."
@@ -498,6 +585,7 @@ with st.sidebar:
     selected_people = st.multiselect("Responsible rows", people, default=people)
     selected_statuses = st.multiselect("Status columns", statuses, default=statuses)
 
+
     st.divider()
     st.header("Board columns")
 
@@ -626,7 +714,16 @@ st.caption(
     "Task cards show title, project, and due date. Open Details for the rest. Drag cards between columns and responsible rows."
 )
 
+board_action_cols = st.columns([1, 5])
+if board_action_cols[0].button("Add task", type="primary"):
+    add_task_dialog(project_ids, people, statuses)
+
+if st.session_state.get("show_added_task_dialog"):
+    task_added_dialog()
+
 visible_statuses = [status for status in statuses if status in selected_statuses]
 visible_people = [person for person in people if person in selected_people]
 board_html = build_board_html(visible_statuses, visible_people, filtered_tasks)
 components.html(board_html, height=board_height(len(visible_people)), scrolling=True)
+
+
