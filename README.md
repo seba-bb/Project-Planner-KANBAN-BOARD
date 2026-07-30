@@ -1,4 +1,4 @@
-# Engineering Workflow Manager
+﻿# Engineering Workflow Manager
 
 Engineering Workflow Manager is an application for managing new product introductions, engineering changes, and tooling transfers in a manufacturing company specializing in metal stamping.
 
@@ -46,8 +46,15 @@ This application aims to make the full workflow visible, repeatable, and easier 
 6. Complete role-based checklists.
 7. Attach files or document links.
 8. Send email notifications when subsequent tasks are unlocked.
-9. Display a management dashboard.
-10. Export the project summary to PDF.
+9. Provide role-based task visibility.
+10. Display a management dashboard.
+11. Export the project summary to PDF.
+
+### Task Visibility
+
+Each role should have clear visibility of its own assigned tasks, deadlines, statuses, and blockers.
+
+All roles should also be able to see the tasks assigned to other roles in a shared project board, similar to Microsoft Teams Planner or Trello. This shared view should make ownership, dependencies, progress, and blocked work transparent across the full project team.
 
 ## Example Workflow
 
@@ -95,6 +102,8 @@ The dashboard should display:
 - All projects.
 - Status of each project.
 - Project completion percentage.
+- Shared task board with tasks grouped by status, owner, role, or workflow stage.
+- My Tasks view for the currently selected role or user.
 - Delayed projects.
 - Blocked projects.
 - Reason for blockage.
@@ -153,3 +162,4 @@ The dashboard should display:
 3. Design the database.
 4. Build the product backlog and user stories.
 5. Implement the solution using Python and Streamlit.
+

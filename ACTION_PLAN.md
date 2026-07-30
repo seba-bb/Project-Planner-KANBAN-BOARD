@@ -1,4 +1,4 @@
-# Engineering Workflow Manager - Action Plan
+﻿# Engineering Workflow Manager - Action Plan
 
 ## Objective
 
@@ -28,16 +28,21 @@ Build an MVP application that helps manage new product introductions, engineerin
   - Technical Director
 - Assign task ownership rules.
 - Define approval authority for each workflow stage.
-- Identify which users only need dashboard visibility.
+- Define task visibility rules:
+  - Each role must clearly see its own assigned tasks.
+  - All roles must be able to see tasks assigned to other roles.
+  - The shared view should work like a Microsoft Teams Planner or Trello board.
+- Identify which users need full edit access and which users only need visibility.
 
-### 3. Prepare Product Backlog
+### 3. Product Backlog
 
-- Convert MVP features into user stories.
-- Prioritize stories by business value and technical dependency.
-- Mark must-have, should-have, and future features.
-- Define acceptance criteria for each user story.
+Status: Deferred for now.
+
+User stories will be skipped at this stage so the project can move directly into Phase 2: UX and Data Design. The backlog can be created later after the first screens and database structure are clearer.
 
 ## Phase 2: UX and Data Design
+
+Status: Active.
 
 ### 4. Create UI Wireframes
 
@@ -45,6 +50,8 @@ Build an MVP application that helps manage new product introductions, engineerin
 - Design the project creation screen.
 - Design the project detail view.
 - Design task and checklist views.
+- Design a shared task board similar to Microsoft Teams Planner or Trello.
+- Design a My Tasks view filtered by the current role or user.
 - Design file attachment and document link sections.
 - Design PDF export flow.
 
@@ -105,6 +112,9 @@ Build an MVP application that helps manage new product introductions, engineerin
 ### 10. Implement Task Management
 
 - Add task owner, due date, status, and comments.
+- Add role-based task filtering so each role can quickly see its own tasks.
+- Add a shared project task board where all roles can see tasks assigned to everyone.
+- Support board grouping by status, owner, role, and workflow stage.
 - Support task status changes:
   - Not started
   - In progress
@@ -135,6 +145,8 @@ Build an MVP application that helps manage new product introductions, engineerin
 
 - Display all projects.
 - Show project status and completion percentage.
+- Show a shared task board for each project.
+- Show My Tasks for the selected role or user.
 - Highlight delayed projects.
 - Highlight blocked projects and reasons.
 - Show upcoming deadlines.
@@ -153,6 +165,8 @@ Build an MVP application that helps manage new product introductions, engineerin
 
 - Test project creation for all project types.
 - Test workflow generation and task unlocking.
+- Test role-based My Tasks visibility.
+- Test shared board visibility across all roles.
 - Test checklist and approval gates.
 - Test file uploads.
 - Test dashboard calculations.
@@ -202,8 +216,10 @@ Build an MVP application that helps manage new product introductions, engineerin
 
 ## Immediate Next Actions
 
-1. Confirm the final list of project types and workflow stages.
-2. Create user stories for the MVP backlog.
-3. Sketch the dashboard and project detail screens.
-4. Draft the first SQLite database schema.
-5. Start the Streamlit application skeleton.
+1. Sketch the dashboard, project detail, shared board, and My Tasks screens.
+2. Draft the first SQLite database schema.
+3. Define task status columns for the board view.
+4. Define role-based task visibility rules in the data model.
+5. Review the Phase 2 design before starting the Streamlit application skeleton.
+
+
