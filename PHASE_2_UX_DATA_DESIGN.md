@@ -67,28 +67,49 @@ Board columns should be configurable in the MVP prototype:
 - New columns can be added.
 - Renaming a column should keep existing tasks in the renamed column.
 
+Project IDs should be configurable in the MVP prototype:
+
+- Existing project IDs can be changed.
+- New project IDs can be added.
+- Renaming a project ID should keep existing tasks connected to the renamed project ID.
+
 Suggested board rows:
 
 - One swimlane per responsible person or role.
 - Each swimlane should show that person's tasks across all status columns.
+- Existing swimlane names can be changed.
+- New swimlanes can be added.
+- Existing swimlanes can be removed from the board.
+- Renaming a swimlane should keep existing tasks connected to the renamed responsible person or role.
 - The layout should make it easy to compare workload and progress between responsible people.
 
-Each task card should show:
+Each task card should show directly on the card:
 
-- Task name.
+- Task title.
+- Project name.
+- Due date.
+
+Further task information should be visible only after the task card is opened:
+
 - Project ID.
 - Owner.
 - Role.
-- Due date.
 - Status.
 - Workflow stage.
+- Description.
 - Blocked reason, if blocked.
 - Attachment or checklist indicator, if relevant.
+
+Task cards should support drag and drop:
+
+- Move a task between status columns.
+- Move a task between responsible rows or roles.
+- Keep the static prototype interaction in the browser until database persistence is added.
 
 Board filters:
 
 - Project ID.
-- Responsible person.
+- Responsible person or row.
 - Role.
 - Workflow stage.
 - Status.
@@ -255,6 +276,7 @@ Required fields:
 
 ## Visibility Rules
 
+- A task always has a project ID.
 - A task always has an owner role and may also have a specific owner user.
 - My Tasks filters tasks by the selected role or user.
 - Shared Board shows tasks for all roles on the project.
@@ -270,5 +292,7 @@ Required fields:
 5. Project creation wireframe.
 6. First SQLite schema draft.
 7. Review notes before implementation starts.
+
+
 
 
