@@ -42,7 +42,6 @@ DEFAULT_TASKS = [
         "owner": "Project Manager",
         "status": "Completed",
         "due": "2026-08-02",
-        "stage": "Project Setup",
         "project_id": "PRJ-001",
         "project": "NPI - Stamping Bracket",
         "description": "Create the initial project record and confirm the project manager.",
@@ -52,7 +51,6 @@ DEFAULT_TASKS = [
         "owner": "Project Manager",
         "status": "Backlog / To Do",
         "due": "2026-08-04",
-        "stage": "Project Setup",
         "project_id": "PRJ-001",
         "project": "NPI - Stamping Bracket",
         "description": "Attach the customer purchase order and verify the commercial reference.",
@@ -62,7 +60,6 @@ DEFAULT_TASKS = [
         "owner": "Manufacturing Engineer",
         "status": "In Progress",
         "due": "2026-08-08",
-        "stage": "Feasibility Review",
         "project_id": "PRJ-001",
         "project": "NPI - Stamping Bracket",
         "description": "Review process feasibility, press capacity, tooling assumptions, and cycle time risk.",
@@ -72,7 +69,6 @@ DEFAULT_TASKS = [
         "owner": "Quality Engineer",
         "status": "Backlog / To Do",
         "due": "2026-08-05",
-        "stage": "Feasibility Review",
         "project_id": "PRJ-001",
         "project": "NPI - Stamping Bracket",
         "description": "Check the latest customer drawing revision and confirm special characteristics.",
@@ -82,7 +78,6 @@ DEFAULT_TASKS = [
         "owner": "Quality Engineer",
         "status": "Backlog / To Do",
         "due": "2026-08-06",
-        "stage": "Feasibility Review",
         "project_id": "PRJ-001",
         "project": "NPI - Stamping Bracket",
         "description": "Prepare the quality checklist for feasibility gate review.",
@@ -92,7 +87,6 @@ DEFAULT_TASKS = [
         "owner": "Quality Engineer",
         "status": "Backlog / To Do",
         "due": "2026-08-09",
-        "stage": "Documentation Preparation",
         "project_id": "PRJ-001",
         "project": "NPI - Stamping Bracket",
         "description": "Create the initial Control Plan with process steps and inspection points.",
@@ -102,7 +96,6 @@ DEFAULT_TASKS = [
         "owner": "Quality Engineer",
         "status": "Backlog / To Do",
         "due": "2026-08-11",
-        "stage": "Documentation Preparation",
         "project_id": "PRJ-001",
         "project": "NPI - Stamping Bracket",
         "description": "Prepare the first CMM measurement program for dimensional validation.",
@@ -112,7 +105,6 @@ DEFAULT_TASKS = [
         "owner": "Quality Engineer",
         "status": "Backlog / To Do",
         "due": "2026-08-13",
-        "stage": "Documentation Preparation",
         "project_id": "PRJ-002",
         "project": "Engineering Change - Seat Rail Clip",
         "description": "Confirm required PPAP documents and evidence for customer submission.",
@@ -122,7 +114,6 @@ DEFAULT_TASKS = [
         "owner": "Logistics",
         "status": "Backlog / To Do",
         "due": "2026-08-12",
-        "stage": "Documentation Preparation",
         "project_id": "PRJ-002",
         "project": "Engineering Change - Seat Rail Clip",
         "description": "Review packaging concept, handling method, and available container options.",
@@ -132,7 +123,6 @@ DEFAULT_TASKS = [
         "owner": "Purchasing",
         "status": "In Progress",
         "due": "2026-08-11",
-        "stage": "Purchasing and Logistics",
         "project_id": "PRJ-002",
         "project": "Engineering Change - Seat Rail Clip",
         "description": "Confirm supplier cost impact and timing for purchased components.",
@@ -142,7 +132,6 @@ DEFAULT_TASKS = [
         "owner": "Technical Director",
         "status": "Backlog / To Do",
         "due": "2026-08-10",
-        "stage": "Feasibility Review",
         "project_id": "PRJ-003",
         "project": "Tool Transfer - Door Reinforcement",
         "description": "Approve the technical feasibility gate before downstream work starts.",
@@ -152,7 +141,6 @@ DEFAULT_TASKS = [
         "owner": "Logistics",
         "status": "Rejected",
         "due": "2026-08-06",
-        "stage": "Purchasing and Logistics",
         "project_id": "PRJ-003",
         "project": "Tool Transfer - Door Reinforcement",
         "description": "Rejected because the container footprint does not match the new logistics flow.",
@@ -225,7 +213,11 @@ def initialize_state() -> None:
 
     for task in st.session_state.tasks:
         # Older/default tasks may not include fields added by newer UI features.
-        task.setdefault("responsible_email", st.session_state.users[0])
+        existing_responsible = task.get("responsible_emails", task.get("responsible_email", st.session_state.users[0]))
+        if isinstance(existing_responsible, str):
+            existing_responsible = [existing_responsible]
+        task["responsible_emails"] = [email for email in existing_responsible if email]
+        task["responsible_email"] = ", ".join(task["responsible_emails"])
         task.setdefault("attachments", [])
         task.setdefault("email_notification", False)
 
@@ -372,6 +364,61 @@ def add_value(state_key: str, value: str, item_label: str) -> tuple[bool, str]:
     return True, f"Added {item_label.lower()}: {cleaned_value}."
 
 
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def add_user_emails(raw_emails: str) -> tuple[bool, str]:
+    candidates = [normalize_email(email) for email in raw_emails.replace(",", "\n").splitlines()]
+    candidates = [email for email in candidates if email]
+
+    if not candidates:
+        return False, "Enter at least one email address."
+
+    invalid_emails = [email for email in candidates if "@" not in email or "." not in email.split("@")[-1]]
+    if invalid_emails:
+        return False, f"Invalid email address: {invalid_emails[0]}."
+
+    added_emails = []
+    for email in candidates:
+        if email not in st.session_state.users:
+            st.session_state.users.append(email)
+            added_emails.append(email)
+
+    if not added_emails:
+        return False, "These email addresses are already on the list."
+
+    return True, f"Added {len(added_emails)} email address(es)."
+
+
+def remove_user_emails(emails_to_remove: list[str]) -> tuple[bool, str]:
+    if not emails_to_remove:
+        return False, "Select at least one email address to remove."
+
+    remaining_users = [email for email in st.session_state.users if email not in emails_to_remove]
+    if not remaining_users:
+        return False, "At least one email address must remain."
+
+    st.session_state.users = remaining_users
+    for task in st.session_state.tasks:
+        task_emails = [email for email in task.get("responsible_emails", []) if email in remaining_users]
+        task["responsible_emails"] = task_emails or [remaining_users[0]]
+        task["responsible_email"] = ", ".join(task["responsible_emails"])
+
+    return True, "Email list updated."
+
+
+def responsible_emails_list(task: dict[str, object]) -> list[str]:
+    emails = task.get("responsible_emails", task.get("responsible_email", []))
+    if isinstance(emails, str):
+        emails = [email.strip() for email in emails.split(",")]
+    return [str(email) for email in emails if email]
+
+
+def responsible_emails_text(task: dict[str, object]) -> str:
+    return ", ".join(responsible_emails_list(task))
+
+
 def add_attachments_to_task(
     task_index: int,
     uploaded_files: list[object],
@@ -421,10 +468,9 @@ def add_task(
     project_id: str,
     project: str,
     owner: str,
-    responsible_email: str,
+    responsible_emails: list[str],
     status: str,
     due: str,
-    stage: str,
     description: str,
     attachments: list[str],
     send_email: bool,
@@ -433,7 +479,6 @@ def add_task(
     # required fields are present and human-readable.
     cleaned_title = normalize_name(title)
     cleaned_project = normalize_name(project)
-    cleaned_stage = normalize_name(stage)
     cleaned_description = description.strip()
 
     if not cleaned_title:
@@ -442,13 +487,16 @@ def add_task(
     if not cleaned_project:
         return False, "Project name is required."
 
+    if not responsible_emails:
+        return False, "Select at least one responsible person."
+
     task = {
         "title": cleaned_title,
         "owner": owner,
-        "responsible_email": responsible_email,
+        "responsible_emails": responsible_emails,
+        "responsible_email": ", ".join(responsible_emails),
         "status": status,
         "due": due,
-        "stage": cleaned_stage or "Not assigned",
         "project_id": project_id,
         "project": cleaned_project,
         "description": cleaned_description or "No additional details provided.",
@@ -467,13 +515,12 @@ def add_task_dialog(project_ids: list[str], people: list[str], statuses: list[st
         task_project_id = st.selectbox("Project ID", project_ids)
         task_project = st.text_input("Project name", placeholder="NPI - Stamping Bracket")
         task_owner = st.selectbox("Responsible row", people)
-        responsible_email = st.selectbox("Responsible", users)
+        responsible_emails = st.multiselect("Responsible people", users, default=users[:1])
         task_status = st.selectbox("Column/status", statuses)
         task_due = st.date_input("Due date")
-        task_stage = st.text_input("Workflow stage", placeholder="Documentation Preparation")
         task_description = st.text_area("Details", placeholder="Additional task information")
         uploaded_files = st.file_uploader("Attach files", accept_multiple_files=True)
-        send_email = st.checkbox("Send email to responsible person")
+        send_email = st.checkbox("Send email to responsible people")
         submitted = st.form_submit_button("Add task")
 
     if submitted:
@@ -482,10 +529,9 @@ def add_task_dialog(project_ids: list[str], people: list[str], statuses: list[st
             task_project_id,
             task_project,
             task_owner,
-            responsible_email,
+            responsible_emails,
             task_status,
             task_due.isoformat(),
-            task_stage,
             task_description,
             [file.name for file in uploaded_files],
             send_email,
@@ -528,6 +574,40 @@ def attach_files_dialog() -> None:
             st.rerun()
         st.error(message)
 
+
+@st.dialog("Manage people emails")
+def manage_people_emails_dialog() -> None:
+    st.caption("These emails are available when assigning responsible people to a task.")
+    current_users = st.session_state.users
+    st.write("Current emails")
+    for email in current_users:
+        st.markdown(f"- {escape(email)}")
+
+    with st.form("add_people_emails_form"):
+        raw_emails = st.text_area(
+            "Add emails",
+            placeholder="one.person@company.com, another.person@company.com",
+        )
+        add_emails_submitted = st.form_submit_button("Add emails")
+
+    if add_emails_submitted:
+        success, message = add_user_emails(raw_emails)
+        if success:
+            st.success(message)
+            st.rerun()
+        st.error(message)
+
+    with st.form("remove_people_emails_form"):
+        emails_to_remove = st.multiselect("Emails to remove", current_users)
+        remove_emails_submitted = st.form_submit_button("Remove selected emails")
+
+    if remove_emails_submitted:
+        success, message = remove_user_emails(emails_to_remove)
+        if success:
+            st.success(message)
+            st.rerun()
+        st.error(message)
+
 @st.dialog("Task added")
 def task_added_dialog() -> None:
     task = st.session_state.get("last_added_task")
@@ -539,10 +619,9 @@ def task_added_dialog() -> None:
         st.markdown(f"**Project ID:** {escape(task['project_id'])}")
         st.markdown(f"**Project name:** {escape(task['project'])}")
         st.markdown(f"**Responsible row:** {escape(task['owner'])}")
-        st.markdown(f"**Responsible:** {escape(task['responsible_email'])}")
+        st.markdown(f"**Responsible:** {escape(responsible_emails_text(task))}")
         st.markdown(f"**Column/status:** {escape(task['status'])}")
         st.markdown(f"**Due date:** {escape(task['due'])}")
-        st.markdown(f"**Workflow stage:** {escape(task['stage'])}")
         attachment_names = ", ".join(task.get("attachments", [])) or "No files attached"
         st.markdown(f"**Details:** {escape(task['description'])}")
         st.markdown(f"**Attachments:** {escape(attachment_names)}")
@@ -553,10 +632,10 @@ def task_added_dialog() -> None:
                 f"Project ID: {task['project_id']}\n"
                 f"Project: {task['project']}\n"
                 f"Due date: {task['due']}\n"
-                f"Workflow stage: {task['stage']}\n\n"
                 f"Details: {task['description']}"
             )
-            st.markdown(f"[Open email draft](mailto:{task['responsible_email']}?subject={subject}&body={body})")
+            recipients = quote(",".join(responsible_emails_list(task)), safe=",@.")
+            st.markdown(f"[Open email draft](mailto:{recipients}?subject={subject}&body={body})")
 
     if st.button("Close", key="close_added_task_dialog"):
         st.session_state.show_added_task_dialog = False
@@ -761,6 +840,34 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         font-size: 12px;
         line-height: 1.45;
     }}
+    .due-stack {{
+        align-items: center;
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 2px;
+        vertical-align: top;
+    }}
+    .due-history {{
+        color: #94a3b8;
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 4px;
+    }}
+    .due-history span {{
+        text-decoration: line-through;
+    }}
+    .due-history span::after {{
+        color: #94a3b8;
+        content: "->";
+        display: inline-block;
+        margin-left: 4px;
+        text-decoration: none;
+    }}
+    .due-current {{
+        color: #334155;
+        font-weight: 800;
+    }}
     details {{
         border-top: 1px solid #e2e8f0;
         margin-top: 8px;
@@ -842,7 +949,8 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         display: grid;
         gap: 10px;
     }}
-    .form-grid label {{
+    .form-grid label,
+    .field-label {{
         color: #334155;
         font-size: 12px;
         font-weight: 800;
@@ -862,6 +970,126 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
     .form-grid textarea {{
         min-height: 82px;
         resize: vertical;
+    }}
+    .responsible-multiselect {{
+        margin-top: 4px;
+        position: relative;
+    }}
+    .responsible-control {{
+        align-items: center;
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        box-sizing: border-box;
+        cursor: pointer;
+        display: grid;
+        gap: 8px;
+        grid-template-columns: 1fr auto auto;
+        min-height: 40px;
+        padding: 6px 8px;
+        width: 100%;
+    }}
+    .responsible-control.open {{
+        border-color: #94a3b8;
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.10);
+    }}
+    .responsible-tags {{
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-width: 0;
+    }}
+    .responsible-placeholder {{
+        color: #64748b;
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    .responsible-chip {{
+        align-items: center;
+        background: #ff4b4b;
+        border-radius: 6px;
+        color: #ffffff;
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 800;
+        gap: 6px;
+        max-width: 210px;
+        min-height: 28px;
+        padding: 4px 7px;
+    }}
+    .responsible-chip span {{
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }}
+    .responsible-chip button,
+    .responsible-clear {{
+        align-items: center;
+        background: rgba(255, 255, 255, 0.22);
+        border: 0;
+        border-radius: 999px;
+        color: inherit;
+        cursor: pointer;
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 900;
+        height: 18px;
+        justify-content: center;
+        line-height: 1;
+        padding: 0;
+        width: 18px;
+    }}
+    .responsible-clear {{
+        background: #94a3b8;
+        color: #ffffff;
+    }}
+    .responsible-caret {{
+        color: #475569;
+        font-size: 12px;
+        font-weight: 900;
+    }}
+    .responsible-menu {{
+        background: #ffffff;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.14);
+        display: none;
+        left: 0;
+        margin-top: 4px;
+        max-height: 190px;
+        overflow-y: auto;
+        padding: 6px;
+        position: absolute;
+        right: 0;
+        z-index: 20;
+    }}
+    .responsible-menu.open {{
+        display: grid;
+        gap: 4px;
+    }}
+    .responsible-option {{
+        align-items: center;
+        border-radius: 5px;
+        color: #334155;
+        cursor: pointer;
+        display: grid;
+        font-size: 13px;
+        font-weight: 700;
+        gap: 8px;
+        grid-template-columns: 16px 1fr;
+        padding: 7px 8px;
+    }}
+    .responsible-option:hover {{
+        background: #f1f5f9;
+    }}
+    .responsible-option input {{
+        height: 14px;
+        margin: 0;
+        width: 14px;
+    }}
+    .responsible-option span {{
+        overflow-wrap: anywhere;
     }}
     .task-list-section,
     .activity-panel {{
@@ -1049,10 +1277,18 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
                     <label>Project ID<input id="edit-project-id" type="text"></label>
                     <label>Project name<input id="edit-project" type="text"></label>
                     <label>Responsible row<select id="edit-owner"></select></label>
-                    <label>Responsible<select id="edit-responsible-email"></select></label>
+                    <div class="field-label">Responsible people
+                        <div class="responsible-multiselect" id="edit-responsible-people">
+                            <div id="responsible-control" class="responsible-control" tabindex="0" role="button" aria-expanded="false">
+                                <div id="responsible-tags" class="responsible-tags"></div>
+                                <button type="button" id="responsible-clear" class="responsible-clear" title="Clear selected people">x</button>
+                                <span class="responsible-caret">v</span>
+                            </div>
+                            <div id="responsible-menu" class="responsible-menu"></div>
+                        </div>
+                    </div>
                     <label>Column/status<select id="edit-status"></select></label>
                     <label>Due date<input id="edit-due" type="date"></label>
-                    <label>Workflow stage<input id="edit-stage" type="text"></label>
                     <label>Details<textarea id="edit-description"></textarea></label>
                     <label>Attached files<textarea id="edit-attachments" placeholder="One file name or link per line"></textarea></label>
                     <div id="edit-attachment-links" class="attachment-list"></div>
@@ -1091,6 +1327,7 @@ const board = document.getElementById("board");
 const modal = document.getElementById("edit-modal");
 let draggedId = null;
 let editingTaskId = null;
+let editingResponsibleEmails = [];
 
 function cardClass(status) {{
     const lowered = status.toLowerCase();
@@ -1139,13 +1376,106 @@ function findTask(taskId) {{
 
 function fillSelect(select, options, selectedValue) {{
     select.innerHTML = "";
+    const selectedValues = Array.isArray(selectedValue) ? selectedValue : [selectedValue];
     options.forEach(optionValue => {{
         const option = document.createElement("option");
         option.value = optionValue;
         option.textContent = optionValue;
-        option.selected = optionValue === selectedValue;
+        option.selected = selectedValues.includes(optionValue);
         select.appendChild(option);
     }});
+}}
+
+function selectedOptions(select) {{
+    return Array.from(select.selectedOptions).map(option => option.value).filter(Boolean);
+}}
+
+function uniqueValues(values) {{
+    return Array.from(new Set(values.filter(Boolean)));
+}}
+
+function setResponsibleMenuOpen(isOpen) {{
+    const control = document.getElementById("responsible-control");
+    const menu = document.getElementById("responsible-menu");
+    control.classList.toggle("open", isOpen);
+    control.setAttribute("aria-expanded", String(isOpen));
+    menu.classList.toggle("open", isOpen);
+}}
+
+function syncResponsiblePicker() {{
+    const tags = document.getElementById("responsible-tags");
+    const menu = document.getElementById("responsible-menu");
+    tags.innerHTML = "";
+    menu.innerHTML = "";
+
+    if (!editingResponsibleEmails.length) {{
+        const placeholder = document.createElement("span");
+        placeholder.className = "responsible-placeholder";
+        placeholder.textContent = "Choose responsible people";
+        tags.appendChild(placeholder);
+    }}
+
+    editingResponsibleEmails.forEach(email => {{
+        const chip = document.createElement("span");
+        chip.className = "responsible-chip";
+        const label = document.createElement("span");
+        label.textContent = email;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.title = `Remove ${{email}}`;
+        remove.textContent = "x";
+        remove.addEventListener("click", event => {{
+            event.stopPropagation();
+            editingResponsibleEmails = editingResponsibleEmails.filter(value => value !== email);
+            syncResponsiblePicker();
+        }});
+        chip.appendChild(label);
+        chip.appendChild(remove);
+        tags.appendChild(chip);
+    }});
+
+    data.users.forEach(email => {{
+        const row = document.createElement("label");
+        row.className = "responsible-option";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = email;
+        checkbox.checked = editingResponsibleEmails.includes(email);
+        checkbox.addEventListener("change", () => {{
+            if (checkbox.checked) {{
+                editingResponsibleEmails = uniqueValues([...editingResponsibleEmails, email]);
+            }} else {{
+                editingResponsibleEmails = editingResponsibleEmails.filter(value => value !== email);
+            }}
+            syncResponsiblePicker();
+        }});
+        const label = document.createElement("span");
+        label.textContent = email;
+        row.appendChild(checkbox);
+        row.appendChild(label);
+        menu.appendChild(row);
+    }});
+}}
+
+function renderResponsiblePicker(selectedValues) {{
+    const selected = Array.isArray(selectedValues) ? selectedValues : [selectedValues];
+    editingResponsibleEmails = uniqueValues(selected);
+    syncResponsiblePicker();
+    setResponsibleMenuOpen(false);
+}}
+
+function selectedResponsibleEmails() {{
+    return editingResponsibleEmails.slice();
+}}
+
+function taskResponsibleEmails(task) {{
+    if (Array.isArray(task.responsible_emails)) return task.responsible_emails;
+    const legacyEmail = text(task.responsible_email);
+    return legacyEmail ? legacyEmail.split(",").map(value => value.trim()).filter(Boolean) : [];
+}}
+
+function responsibleEmailsText(task) {{
+    return taskResponsibleEmails(task).join(", ");
 }}
 
 function addCell(tag, className, content) {{
@@ -1222,7 +1552,7 @@ function taskStoreKey(task) {{
 
 function taskMeta(task) {{
     if (task._meta) return task._meta;
-    const fallback = {{ checklist: [], comments: [], activity: [] }};
+    const fallback = {{ checklist: [], comments: [], activity: [], due_history: [] }};
     try {{
         task._meta = {{ ...fallback, ...JSON.parse(localStorage.getItem(taskStoreKey(task)) || "{{}}") }};
     }} catch (error) {{
@@ -1231,6 +1561,7 @@ function taskMeta(task) {{
     task._meta.checklist = Array.isArray(task._meta.checklist) ? task._meta.checklist : [];
     task._meta.comments = Array.isArray(task._meta.comments) ? task._meta.comments : [];
     task._meta.activity = Array.isArray(task._meta.activity) ? task._meta.activity : [];
+    task._meta.due_history = Array.isArray(task._meta.due_history) ? task._meta.due_history : [];
     return task._meta;
 }}
 
@@ -1243,7 +1574,8 @@ function nowLabel() {{
 }}
 
 function currentUserLabel() {{
-    const user = text(document.getElementById("edit-responsible-email").value || data.users[0] || "User");
+    const selectedUsers = selectedResponsibleEmails();
+    const user = text(selectedUsers[0] || data.users[0] || "User");
     return user.includes("@") ? user.split("@")[0] : user;
 }}
 
@@ -1353,7 +1685,16 @@ function updateCardFromTask(card, task) {{
     card.dataset.status = task.status;
     card.querySelector(".task-title").textContent = text(task.title);
     card.querySelector(".project").textContent = text(task.project);
-    card.querySelector(".due").textContent = text(task.due);
+    const dueHistory = card.querySelector(".due-history");
+    if (dueHistory) {{
+        dueHistory.innerHTML = "";
+        taskMeta(task).due_history.forEach(oldDate => {{
+            const oldDateNode = document.createElement("span");
+            oldDateNode.textContent = text(oldDate);
+            dueHistory.appendChild(oldDateNode);
+        }});
+    }}
+    card.querySelector(".due-current").textContent = text(task.due);
     const projectBadge = card.querySelector(".task-project-id-badge");
     if (projectBadge) {{
         projectBadge.textContent = text(task.project_id);
@@ -1361,9 +1702,8 @@ function updateCardFromTask(card, task) {{
     }}
     card.querySelector(".project-id-detail").textContent = text(task.project_id);
     card.querySelector(".owner").textContent = text(task.owner);
-    card.querySelector(".responsible-email").textContent = text(task.responsible_email);
+    card.querySelector(".responsible-email").textContent = responsibleEmailsText(task) || "No responsible person selected";
     card.querySelector(".status").textContent = text(task.status);
-    card.querySelector(".stage").textContent = text(task.stage);
     card.querySelector(".description").textContent = text(task.description);
     card.querySelector(".attachments").textContent = task.attachments && task.attachments.length ? task.attachments.join(", ") : "No files attached";
 }}
@@ -1382,7 +1722,7 @@ function createTaskCard(task) {{
         </div>
         <div class="task-summary">
             <strong>Project:</strong> <span class="project"></span><br>
-            <strong>Due:</strong> <span class="due"></span>
+            <strong>Due:</strong> <span class="due-stack"><span class="due-history"></span><span class="due-current"></span></span>
         </div>
         <details>
             <summary>Details</summary>
@@ -1391,7 +1731,6 @@ function createTaskCard(task) {{
                 <strong>Owner:</strong> <span class="owner"></span><br>
                 <strong>Responsible:</strong> <span class="responsible-email"></span><br>
                 <strong>Status:</strong> <span class="status"></span><br>
-                <strong>Stage:</strong> <span class="stage"></span><br>
                 <strong>Description:</strong> <span class="description"></span><br>
                 <strong>Attachments:</strong> <span class="attachments attachment-list"></span>
             </div>
@@ -1454,10 +1793,9 @@ function openEditModal(taskId) {{
     document.getElementById("edit-project-id").value = text(task.project_id);
     document.getElementById("edit-project").value = text(task.project);
     fillSelect(document.getElementById("edit-owner"), data.people, task.owner);
-    fillSelect(document.getElementById("edit-responsible-email"), data.users, task.responsible_email);
+    renderResponsiblePicker(taskResponsibleEmails(task));
     fillSelect(document.getElementById("edit-status"), data.statuses, task.status);
     document.getElementById("edit-due").value = text(task.due);
-    document.getElementById("edit-stage").value = text(task.stage);
     document.getElementById("edit-description").value = text(task.description);
     document.getElementById("edit-attachments").value = task.attachments && task.attachments.length ? task.attachments.join("\\n") : "";
     renderAttachmentLinks(document.getElementById("edit-attachment-links"), task);
@@ -1484,10 +1822,22 @@ function saveEditedTask() {{
     task.project_id = document.getElementById("edit-project-id").value.trim() || task.project_id;
     task.project = document.getElementById("edit-project").value.trim() || task.project;
     task.owner = document.getElementById("edit-owner").value;
-    task.responsible_email = document.getElementById("edit-responsible-email").value;
+    task.responsible_emails = selectedResponsibleEmails();
+    if (!task.responsible_emails.length && data.users.length) task.responsible_emails = [data.users[0]];
+    task.responsible_email = task.responsible_emails.join(", ");
     task.status = document.getElementById("edit-status").value;
-    task.due = document.getElementById("edit-due").value || task.due;
-    task.stage = document.getElementById("edit-stage").value.trim() || "Not assigned";
+    const previousDue = text(task.due);
+    const nextDue = document.getElementById("edit-due").value || task.due;
+    if (nextDue !== previousDue) {{
+        const meta = taskMeta(task);
+        meta.due_history.unshift(previousDue);
+        meta.due_history = Array.from(new Set(meta.due_history.filter(Boolean))).slice(0, 5);
+        task.due = nextDue;
+        saveTaskMeta(task);
+        addActivity(task, `changed due date from ${{previousDue}} to ${{nextDue}}`);
+    }} else {{
+        task.due = nextDue;
+    }}
     task.description = document.getElementById("edit-description").value.trim() || "No additional details provided.";
     const typedAttachments = document.getElementById("edit-attachments").value
         .split("\\n")
@@ -1508,6 +1858,28 @@ function saveEditedTask() {{
     }}
     closeEditModal();
 }}
+
+document.getElementById("responsible-control").addEventListener("click", () => {{
+    const isOpen = document.getElementById("responsible-menu").classList.contains("open");
+    setResponsibleMenuOpen(!isOpen);
+}});
+document.getElementById("responsible-control").addEventListener("keydown", event => {{
+    if (event.key === "Enter" || event.key === " ") {{
+        event.preventDefault();
+        const isOpen = document.getElementById("responsible-menu").classList.contains("open");
+        setResponsibleMenuOpen(!isOpen);
+    }}
+}});
+document.getElementById("responsible-clear").addEventListener("click", event => {{
+    event.stopPropagation();
+    editingResponsibleEmails = [];
+    syncResponsiblePicker();
+}});
+document.addEventListener("click", event => {{
+    if (!document.getElementById("edit-responsible-people").contains(event.target)) {{
+        setResponsibleMenuOpen(false);
+    }}
+}});
 
 document.getElementById("checklist-add").addEventListener("click", () => {{
     const task = findTask(editingTaskId);
@@ -1802,11 +2174,13 @@ st.caption(
     "Task cards show title, project, and due date. Open Details for the rest. Drag cards between columns and responsible rows."
 )
 
-board_action_cols = st.columns([1, 1, 4])
+board_action_cols = st.columns([1, 1, 1, 3])
 if board_action_cols[0].button("Add task", type="primary"):
     add_task_dialog(project_ids, people, statuses, users)
 if board_action_cols[1].button("Attach files"):
     attach_files_dialog()
+if board_action_cols[2].button("People emails"):
+    manage_people_emails_dialog()
 
 if st.session_state.get("show_added_task_dialog"):
     task_added_dialog()

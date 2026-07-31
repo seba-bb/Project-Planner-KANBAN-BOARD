@@ -62,7 +62,7 @@ Status: Active.
   - Roles
   - Projects
   - Project types
-  - Workflow stages
+  - Workflow columns/statuses
   - Tasks
   - Checklists
   - Approvals
@@ -114,7 +114,7 @@ Status: Active.
 - Add task owner, due date, status, and comments.
 - Add role-based task filtering so each role can quickly see its own tasks.
 - Add a shared project task board where all roles can see tasks assigned to everyone.
-- Support board grouping by status, owner, role, and workflow stage.
+- Support board grouping by workflow column/status, owner, and role.
 - Support task status changes:
   - Not started
   - In progress

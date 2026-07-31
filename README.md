@@ -102,7 +102,7 @@ The dashboard should display:
 - All projects.
 - Status of each project.
 - Project completion percentage.
-- Shared task board with tasks grouped by status, owner, role, or workflow stage.
+- Shared task board with tasks grouped by workflow column/status, owner, or role.
 - My Tasks view for the currently selected role or user.
 - Delayed projects.
 - Blocked projects.
@@ -121,13 +121,46 @@ The dashboard should display:
 
 ### Database
 
-- SQLite for MVP.
-- PostgreSQL for production.
+The application should use PostgreSQL as the persistent project database when deployed on local company servers. SQLite can still be useful for early prototypes, but PostgreSQL is the preferred MVP/production database because the planner is shared by multiple users and needs centralized task history, comments, checklist state, due date changes, and reporting data.
+
+Recommended local-server setup:
+
+```text
+User browser
+  -> Streamlit Project Planner app
+  -> Local PostgreSQL server
+  -> Shared local file storage for attachments
+```
+
+Recommended PostgreSQL objects:
+
+- `projects`: project ID, project name, project type, status, customer, start date, target date, blockage reason, project color.
+- `workflow_columns`: configurable board columns such as Open RFQ, Review RFQ, Offer Calculation, In Progress, Completed, or Rejected.
+- `tasks`: title, project reference, responsible row/role, workflow column/status, due date, description, created date, completed date.
+- `task_responsibles`: one task linked to one or more responsible email addresses.
+- `people`: available responsible people and email addresses.
+- `checklist_items`: task checklist text, completion state, completed by, completed date.
+- `comments`: task comments with author and timestamp.
+- `activity_log`: full task/project history such as due date changes, column moves, checklist updates, and file attachments.
+- `attachments`: file metadata and document links connected to projects or tasks.
+
+Example environment variables:
+
+```text
+DB_HOST=local-server-name
+DB_PORT=5432
+DB_NAME=project_planner
+DB_USER=project_planner_app
+DB_PASSWORD=secure_password
+```
+
+The database should store attachment metadata, not large uploaded files. Uploaded files should be stored in a controlled local/shared folder and referenced from PostgreSQL.
 
 ### File Storage
 
-- Local storage for MVP.
-- SharePoint or Azure Blob Storage in the future.
+- Local or shared server folder for MVP, for example `\\server\ProjectPlannerAttachments`.
+- PostgreSQL stores file names, paths, task/project references, uploader, and upload date.
+- SharePoint or Azure Blob Storage can be added in the future.
 
 ### Notifications
 
