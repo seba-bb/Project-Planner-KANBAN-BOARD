@@ -1,6 +1,6 @@
-﻿# Engineering Workflow Manager
+﻿# Project Planner
 
-Engineering Workflow Manager is an application for managing new product introductions, engineering changes, and tooling transfers in a manufacturing company specializing in metal stamping.
+Project Planner is an application for managing new product introductions, engineering changes, and tooling transfers in a manufacturing company specializing in metal stamping.
 
 ## Project Goal
 

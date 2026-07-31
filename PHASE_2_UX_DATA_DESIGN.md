@@ -2,7 +2,7 @@
 
 ## Goal
 
-Design the first usable structure of the Engineering Workflow Manager before starting implementation. This phase focuses on the main screens, task board behavior, role visibility, and the MVP database schema.
+Design the first usable structure of the Project Planner before starting implementation. This phase focuses on the main screens, task board behavior, role visibility, and the MVP database schema.
 
 ## UX Scope
 
