@@ -1,4 +1,8 @@
-﻿# Project Planner
+﻿<<<<<<< HEAD
+ď»ż# Project Planner
+=======
+ď»ż# Engineering Project Planner
+>>>>>>> origin/master
 
 Project Planner is an application for managing new product introductions, engineering changes, and tooling transfers in a manufacturing company specializing in metal stamping.
 
