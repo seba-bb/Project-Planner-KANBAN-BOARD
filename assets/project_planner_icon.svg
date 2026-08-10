@@ -1,0 +1,16 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Project Planner icon">
+  <defs>
+    <linearGradient id="blue" x1="8" y1="8" x2="40" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00a6ff"/>
+      <stop offset="1" stop-color="#0054d6"/>
+    </linearGradient>
+    <linearGradient id="green" x1="25" y1="8" x2="58" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#62d318"/>
+      <stop offset="1" stop-color="#168a00"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="12" fill="#f8fafc"/>
+  <path d="M9 52V17c0-3.9 3.1-7 7-7h24l8 8-18 18H21v16H9Zm12-24h6.7l9.8-10H21v10Z" fill="url(#blue)"/>
+  <path d="M24 52 50 26l-8-8h10c2.2 0 4 1.8 4 4v26c0 2.2-1.8 4-4 4H38l8-8h2V31L27 52h-3Z" fill="url(#green)"/>
+  <path d="M21 28h6.7l9.8-10H21v10Zm25 16h2V31L27 52h-3l22-22v14Z" fill="#0f172a" opacity="0.12"/>
+</svg>

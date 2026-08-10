@@ -4,3 +4,4 @@
 .env
 .venv/
 venv/
+project_planner_actions.csv

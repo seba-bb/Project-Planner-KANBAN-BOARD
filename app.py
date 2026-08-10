@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
 import base64
+import csv
 import json
 import mimetypes
 from pathlib import Path
 from html import escape
+from io import StringIO
 from urllib.parse import quote
 
 import streamlit as st
@@ -32,10 +34,23 @@ DEFAULT_PROJECT_COLORS = [
     "#475569",
 ]
 DEFAULT_USERS = ["sebastian.stasica@die-tech.biz"]
+APP_ICON_PATH = Path(__file__).parent / "assets" / "project_planner_icon.png"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"
+TASK_DATABASE_CSV = Path(__file__).parent / "project_planner_actions.csv"
+TASK_CSV_FIELDS = [
+    "title",
+    "owner",
+    "responsible_emails",
+    "status",
+    "due",
+    "project_id",
+    "project",
+    "description",
+    "attachments",
+    "email_notification",
+]
 
-# Demo seed data used when the Streamlit session starts for the first time.
-# The app currently keeps data in memory, so these values reset for a new session.
+# Demo seed data used when no CSV task database exists yet.
 DEFAULT_TASKS = [
     {
         "title": "Create project record",
@@ -148,9 +163,101 @@ DEFAULT_TASKS = [
 ]
 
 
+
+def task_from_csv_row(row: dict[str, str]) -> dict[str, object]:
+    responsible_emails = csv_json_list(row.get("responsible_emails", ""))
+    attachments = csv_json_list(row.get("attachments", ""))
+    task = {
+        "title": row.get("title", "Untitled task"),
+        "owner": row.get("owner", DEFAULT_PEOPLE[0]),
+        "responsible_emails": responsible_emails,
+        "responsible_email": ", ".join(responsible_emails),
+        "status": row.get("status", DEFAULT_STATUSES[0]),
+        "due": row.get("due", ""),
+        "project_id": row.get("project_id", DEFAULT_PROJECT_IDS[0]),
+        "project": row.get("project", "Unassigned project"),
+        "description": row.get("description", "No additional details provided."),
+        "attachments": attachments,
+        "email_notification": row.get("email_notification", "").strip().lower() in {"1", "true", "yes"},
+    }
+    return task
+
+
+def csv_json_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        parsed = [part.strip() for part in str(value).split(";")]
+    if isinstance(parsed, str):
+        parsed = [parsed]
+    return [str(item) for item in parsed if item]
+
+
+def task_to_csv_row(task: dict[str, object]) -> dict[str, str]:
+    responsible_emails = responsible_emails_list(task)
+    return {
+        "title": str(task.get("title", "")),
+        "owner": str(task.get("owner", "")),
+        "responsible_emails": json.dumps(responsible_emails, ensure_ascii=False),
+        "status": str(task.get("status", "")),
+        "due": str(task.get("due", "")),
+        "project_id": str(task.get("project_id", "")),
+        "project": str(task.get("project", "")),
+        "description": str(task.get("description", "")),
+        "attachments": json.dumps(task.get("attachments", []), ensure_ascii=False),
+        "email_notification": "true" if task.get("email_notification") else "false",
+    }
+
+
+def load_tasks_from_csv() -> list[dict[str, object]]:
+    if not TASK_DATABASE_CSV.exists():
+        return [task.copy() for task in DEFAULT_TASKS]
+
+    with TASK_DATABASE_CSV.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [task_from_csv_row(row) for row in csv.DictReader(csv_file)]
+
+
+def save_tasks_to_csv() -> None:
+    TASK_DATABASE_CSV.parent.mkdir(parents=True, exist_ok=True)
+    with TASK_DATABASE_CSV.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=TASK_CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(task_to_csv_row(task) for task in st.session_state.tasks)
+
+
+def task_database_csv_bytes() -> bytes:
+    rows = [task_to_csv_row(task) for task in st.session_state.tasks]
+
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=TASK_CSV_FIELDS)
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue().encode("utf-8-sig")
+
+
+def render_app_header() -> None:
+    st.markdown(
+        """
+        <div class="app-brand-header" aria-label="Project Planner">
+            <div class="app-brand-monogram" aria-hidden="true">
+                <span class="app-brand-monogram-blue">P</span><span class="app-brand-monogram-green">P</span>
+            </div>
+            <div class="app-brand-wordmark">
+                <span class="app-brand-project">Project</span>
+                <span class="app-brand-planner">Planner</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption("Dashboard board view grouped by responsible people")
 st.set_page_config(
     page_title="Project Planner",
-    page_icon="EWM",
+    page_icon=str(APP_ICON_PATH),
     layout="wide",
 )
 
@@ -160,6 +267,46 @@ st.markdown(
         .block-container {
             padding-top: 1.6rem;
             padding-bottom: 2rem;
+        }
+        .app-brand-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin: 0 0 2px;
+        }
+        .app-brand-monogram {
+            display: flex;
+            align-items: baseline;
+            gap: 0;
+            flex: 0 0 auto;
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            font-size: 3rem;
+            font-weight: 900;
+            line-height: 1;
+            letter-spacing: 0;
+        }
+        .app-brand-monogram-blue {
+            color: #0058c9;
+        }
+        .app-brand-monogram-green {
+            color: #168b00;
+            margin-left: -0.08em;
+        }
+        .app-brand-wordmark {
+            display: flex;
+            align-items: baseline;
+            gap: 22px;
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            font-size: 2.35rem;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: 0;
+        }
+        .app-brand-project {
+            color: #0058c9;
+        }
+        .app-brand-planner {
+            color: #168b00;
         }
         .dashboard-strip {
             display: grid;
@@ -209,17 +356,26 @@ def initialize_state() -> None:
     if "users" not in st.session_state:
         st.session_state.users = DEFAULT_USERS.copy()
     if "tasks" not in st.session_state:
-        st.session_state.tasks = [task.copy() for task in DEFAULT_TASKS]
+        st.session_state.tasks = load_tasks_from_csv()
 
     for task in st.session_state.tasks:
         # Older/default tasks may not include fields added by newer UI features.
         existing_responsible = task.get("responsible_emails", task.get("responsible_email", st.session_state.users[0]))
         if isinstance(existing_responsible, str):
             existing_responsible = [existing_responsible]
-        task["responsible_emails"] = [email for email in existing_responsible if email]
+        task["responsible_emails"] = [email for email in existing_responsible if email] or [st.session_state.users[0]]
         task["responsible_email"] = ", ".join(task["responsible_emails"])
         task.setdefault("attachments", [])
         task.setdefault("email_notification", False)
+        if task.get("status") and task["status"] not in st.session_state.statuses:
+            st.session_state.statuses.append(task["status"])
+        if task.get("owner") and task["owner"] not in st.session_state.people:
+            st.session_state.people.append(task["owner"])
+        if task.get("project_id") and task["project_id"] not in st.session_state.project_ids:
+            st.session_state.project_ids.append(task["project_id"])
+        for email in task["responsible_emails"]:
+            if email not in st.session_state.users:
+                st.session_state.users.append(email)
 
 
 def normalize_name(name: str) -> str:
@@ -348,6 +504,7 @@ def rename_values(
     for task in st.session_state.tasks:
         task[task_field] = rename_map.get(task[task_field], task[task_field])
 
+    save_tasks_to_csv()
     return True, f"{item_label} names updated."
 
 
@@ -405,6 +562,7 @@ def remove_user_emails(emails_to_remove: list[str]) -> tuple[bool, str]:
         task["responsible_emails"] = task_emails or [remaining_users[0]]
         task["responsible_email"] = ", ".join(task["responsible_emails"])
 
+    save_tasks_to_csv()
     return True, "Email list updated."
 
 
@@ -457,6 +615,7 @@ def add_attachments_to_task(
     if not added_names:
         return False, "These files are already attached to the selected task."
 
+    save_tasks_to_csv()
     return True, f"Added {len(added_names)} file(s) to: {task['title']}."
 
 
@@ -505,6 +664,7 @@ def add_task(
     }
     st.session_state.tasks.append(task)
     st.session_state.last_added_task = task.copy()
+    save_tasks_to_csv()
     return True, f"Added task: {cleaned_title}."
 
 
@@ -1947,9 +2107,10 @@ def board_height(people_count: int) -> int:
 
 
 initialize_state()
+if not TASK_DATABASE_CSV.exists():
+    save_tasks_to_csv()
 
-st.title("Project Planner")
-st.caption("Dashboard board view grouped by responsible people")
+render_app_header()
 
 statuses = st.session_state.statuses
 people = st.session_state.people
@@ -1968,6 +2129,14 @@ with st.sidebar:
     selected_project_ids = st.multiselect("Project ID", project_ids, default=project_ids)
     selected_people = st.multiselect("Responsible rows", people, default=people)
     selected_statuses = st.multiselect("Status columns", statuses, default=statuses)
+
+    st.download_button(
+        "Download actions CSV",
+        data=task_database_csv_bytes(),
+        file_name=TASK_DATABASE_CSV.name,
+        mime="text/csv",
+    )
+    st.caption(f"CSV database: {TASK_DATABASE_CSV.name}")
 
     st.divider()
     st.header("Project ID colors")
