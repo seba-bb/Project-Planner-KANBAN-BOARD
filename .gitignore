@@ -5,3 +5,4 @@
 .venv/
 venv/
 project_planner_actions.csv
+board_columns.json

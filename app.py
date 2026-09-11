@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 from uuid import uuid4
+from datetime import date
 from pathlib import Path
 from html import escape
 from io import StringIO
@@ -41,6 +42,7 @@ DEFAULT_USERS = ["sebastian.stasica@die-tech.biz"]
 APP_ICON_PATH = Path(__file__).parent / "assets" / "project_planner_icon.png"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"
 TASK_DATABASE_CSV = Path(__file__).parent / "project_planner_actions.csv"
+BOARD_COLUMNS_JSON = Path(__file__).parent / "board_columns.json"
 TASK_CSV_FIELDS = [
     "id",
     "title",
@@ -296,8 +298,160 @@ def apply_board_edit(event: object) -> None:
         }
 
 
+def load_board_columns() -> list[str]:
+    if not BOARD_COLUMNS_JSON.exists():
+        return DEFAULT_STATUSES.copy()
+    columns = json.loads(BOARD_COLUMNS_JSON.read_text(encoding="utf-8"))
+    if (not isinstance(columns, list) or not columns
+            or any(not isinstance(name, str) or not name.strip() for name in columns)
+            or len(set(columns)) != len(columns)):
+        raise ValueError("The saved board columns are invalid.")
+    return columns
+
+
+def write_board_columns(columns: list[str]) -> None:
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=BOARD_COLUMNS_JSON.parent, delete=False,
+        ) as file:
+            temporary_path = Path(file.name)
+            json.dump(columns, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        os.replace(temporary_path, BOARD_COLUMNS_JSON)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def rename_board_columns(new_names: list[str]) -> tuple[bool, str]:
+    old_names = st.session_state.statuses.copy()
+    names = [normalize_name(name) for name in new_names]
+    if len(names) != len(old_names) or any(not name for name in names):
+        return False, "Column names cannot be empty."
+    if len(set(names)) != len(names):
+        return False, "Column names must be unique."
+    if names == old_names:
+        return True, "Column names unchanged."
+    rename_map = dict(zip(old_names, names, strict=True))
+    wrote_tasks = False
+    try:
+        original_tasks = load_tasks_from_csv()
+        tasks = [task | {"status": rename_map.get(task["status"], task["status"])} for task in original_tasks]
+        if tasks != original_tasks:
+            write_tasks_to_csv(tasks)
+            wrote_tasks = True
+        try:
+            write_board_columns(names)
+        except OSError:
+            # Keep the old ticket statuses if saving the column configuration fails.
+            if wrote_tasks:
+                write_tasks_to_csv(original_tasks)
+            raise
+    except (OSError, ValueError) as error:
+        return False, f"Column names were not saved: {error}"
+    st.session_state.statuses = names
+    st.session_state.tasks = tasks
+    if "status_filter" in st.session_state:
+        st.session_state.updated_status_filter = [
+            rename_map.get(name, name) for name in st.session_state.status_filter
+        ]
+    return True, "Column names updated."
+
+
+def apply_column_rename(event: dict[str, object]) -> None:
+    event_id = event.get("event_id")
+    if not isinstance(event_id, str):
+        return
+    if st.session_state.get("board_save_result", {}).get("event_id") == event_id:
+        return
+    old_name, new_name = event.get("status"), event.get("name")
+    if old_name not in st.session_state.statuses or not isinstance(new_name, str):
+        success, message = False, "This column no longer exists. Reload the board."
+    else:
+        names = [new_name if name == old_name else name for name in st.session_state.statuses]
+        success, message = rename_board_columns(names)
+    st.session_state.board_save_result = {"event_id": event_id, "ok": success, "error": "" if success else message}
+
+
+def move_board_column(status: str, target: str, position: str) -> tuple[bool, str]:
+    columns = st.session_state.statuses.copy()
+    if (not all(isinstance(value, str) for value in (status, target, position))
+            or status not in columns or target not in columns or position not in {"before", "after"}):
+        return False, "The column order changed. Reload the board and try again."
+    if status == target:
+        return True, "Column order unchanged."
+    columns.remove(status)
+    columns.insert(columns.index(target) + (position == "after"), status)
+    try:
+        write_board_columns(columns)
+    except OSError as error:
+        return False, f"Column order was not saved: {error}"
+    st.session_state.statuses = columns
+    return True, "Column order updated."
+
+
+def apply_column_action(event: dict[str, object]) -> None:
+    event_id = event.get("event_id")
+    if not isinstance(event_id, str):
+        return
+    if st.session_state.get("board_save_result", {}).get("event_id") == event_id:
+        return
+    if event.get("action") == "add_column" and isinstance(event.get("name"), str):
+        success, message = add_value("statuses", event["name"], "Column")
+    elif event.get("action") == "move_column":
+        success, message = move_board_column(event.get("status"), event.get("target"), event.get("position"))
+    else:
+        success, message = False, "Invalid column change."
+    st.session_state.board_save_result = {"event_id": event_id, "ok": success, "error": "" if success else message}
+
+
+def reset_board_filters() -> None:
+    st.session_state.filter_keyword = ""
+    st.session_state.filter_members = []
+    st.session_state.filter_due = "Any date"
+    st.session_state.filter_projects = st.session_state.project_ids.copy()
+    st.session_state.filter_owners = st.session_state.people.copy()
+    st.session_state.status_filter = st.session_state.statuses.copy()
+
+
+def task_matches_filters(
+    task: dict[str, object], keyword: str = "", members: list[str] | None = None,
+    due_filter: str = "Any date", today: date | None = None,
+) -> bool:
+    emails = responsible_emails_list(task)
+    searchable = " ".join(str(task.get(field, "")) for field in (
+        "title", "description", "project", "project_id", "owner", "status", "due",
+    )) + " " + " ".join(emails)
+    if any(word not in searchable.casefold() for word in keyword.casefold().split()):
+        return False
+    if members and not (set(emails).intersection(members) or ("No members" in members and not emails)):
+        return False
+    if due_filter == "Any date":
+        return True
+    due_text = str(task.get("due") or "").strip()
+    if due_filter == "No date":
+        return not due_text
+    try:
+        days_left = (date.fromisoformat(due_text) - (today or date.today())).days
+    except ValueError:
+        return False
+    if due_filter == "Overdue":
+        return days_left < 0
+    if due_filter == "Due today":
+        return days_left == 0
+    limits = {"Due in the next day": 1, "Due in the next week": 7, "Due in the next month": 30}
+    return due_filter in limits and 0 <= days_left <= limits[due_filter]
+
+
 def on_board_change() -> None:
     event = st.session_state.get("kanban_board")
+    if isinstance(event, dict) and event.get("action") in {"add_column", "move_column"}:
+        apply_column_action(event)
+        return
+    if isinstance(event, dict) and event.get("action") == "rename_column":
+        apply_column_rename(event)
+        return
     if isinstance(event, dict) and event.get("action") == "add_task":
         if event.get("status") in st.session_state.statuses:
             st.session_state.new_task_request = event
@@ -418,7 +572,9 @@ def initialize_state() -> None:
     # Streamlit reruns the script after most interactions. Session state preserves
     # user-edited lists and tasks across those reruns inside the current browser session.
     if "statuses" not in st.session_state:
-        st.session_state.statuses = DEFAULT_STATUSES.copy()
+        st.session_state.statuses = load_board_columns()
+    if "updated_status_filter" in st.session_state:
+        st.session_state.status_filter = st.session_state.pop("updated_status_filter")
     if "people" not in st.session_state:
         st.session_state.people = DEFAULT_PEOPLE.copy()
     if "project_ids" not in st.session_state:
@@ -563,6 +719,8 @@ def rename_values(
     new_names: list[str],
     item_label: str,
 ) -> tuple[bool, str]:
+    if state_key == "statuses":
+        return rename_board_columns(new_names)
     # Rename list entries and update existing tasks that reference the old names.
     # This keeps the board from losing tasks when a column, project ID, or owner row is renamed.
     cleaned_names = [normalize_name(name) for name in new_names]
@@ -593,6 +751,13 @@ def add_value(state_key: str, value: str, item_label: str) -> tuple[bool, str]:
     if cleaned_value in st.session_state[state_key]:
         return False, f"This {item_label.lower()} already exists."
 
+    if state_key == "statuses":
+        try:
+            write_board_columns([*st.session_state.statuses, cleaned_value])
+        except OSError as error:
+            return False, f"Column was not saved: {error}"
+        if "status_filter" in st.session_state:
+            st.session_state.updated_status_filter = [*st.session_state.status_filter, cleaned_value]
     st.session_state[state_key].append(cleaned_value)
     return True, f"Added {item_label.lower()}: {cleaned_value}."
 
@@ -974,6 +1139,53 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         overflow: hidden;
         padding: 9px 10px 8px;
     }}
+    .column-header {{ cursor: grab; }}
+    .column-header:active {{
+        cursor: grabbing;
+        background: #e0e7ff;
+        box-shadow: 0 6px 14px rgba(37, 99, 235, 0.18);
+    }}
+    .column-header.column-dragging {{
+        background: #e0e7ff;
+        box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
+        transform: translateY(-3px);
+        opacity: 0.7;
+    }}
+    .dropzone.column-dragging {{ opacity: 0.45; }}
+    .column-drop-before {{ border-left: 4px solid #2563eb; }}
+    .column-drop-after {{ border-right: 4px solid #2563eb; }}
+    .add-column-header {{
+        align-self: start;
+        background: #e2e8f0;
+        border: 1px dashed #94a3b8;
+        border-radius: 8px;
+        box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.08);
+        padding: 10px;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }}
+    .add-column-button {{
+        background: transparent;
+        border: 0;
+        color: #475569;
+        cursor: pointer;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        min-height: 40px;
+        text-align: left;
+        width: 100%;
+    }}
+    .add-column-actions {{ display: flex; gap: 6px; margin-top: 8px; }}
+    .add-column-actions button {{
+        border: 1px solid #cbd5e1;
+        border-radius: 5px;
+        background: #ffffff;
+        cursor: pointer;
+        padding: 7px 10px;
+    }}
+    .add-column-actions .primary {{ background: #2563eb; color: #ffffff; }}
     .column-header::before {{
         background: var(--status-accent, #64748b);
         content: "";
@@ -981,12 +1193,48 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         inset: 0 0 auto;
         position: absolute;
     }}
+    .column-title-wrap {{
+        min-width: 0;
+    }}
     .column-title {{
+        background: transparent;
+        border: 0;
+        border-radius: 4px;
+        color: inherit;
+        cursor: text;
+        font-family: inherit;
+        padding: 3px 0;
+        text-align: left;
+        width: 100%;
         font-size: 12px;
         font-weight: 900;
         line-height: 1.15;
         overflow-wrap: anywhere;
         text-transform: uppercase;
+    }}
+    .column-title:hover {{
+        background: #eff6ff;
+    }}
+    .column-title:focus-visible {{
+        outline: 2px solid #2563eb;
+        outline-offset: 2px;
+    }}
+    .column-title-input {{
+        background: #ffffff;
+        border: 1px solid #2563eb;
+        border-radius: 4px;
+        box-sizing: border-box;
+        color: #0f172a;
+        font: inherit;
+        font-size: 12px;
+        min-width: 0;
+        padding: 6px;
+        width: 100%;
+    }}
+    .column-title-error {{
+        color: #b91c1c;
+        font-size: 11px;
+        overflow-wrap: anywhere;
     }}
     .column-count {{
         align-items: center;
@@ -1587,7 +1835,7 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
 </style>
 </head>
 <body>
-<p class="hint">Hold a task card and drop it into another status column. Assignee initials appear below the due date. Double-click a task to edit it in a small window.</p>
+<p class="hint">Drag cards to change status. Drag column headers to reorder them, or click a title to rename it. Double-click a task to edit it.</p>
 <p id="save-error" role="alert" style="color: #b91c1c;"></p>
 <div class="board-wrap">
     <div id="board" class="board"></div>
@@ -1662,6 +1910,10 @@ let draggedId = null;
 let editingTaskId = null;
 let editingResponsibleEmails = [];
 let pendingSaveId = null;
+let pendingColumnRename = null;
+let draggedColumn = null;
+let suppressColumnClickUntil = 0;
+let pendingColumnAdd = null;
 
 function persistTask(task, updates) {{
     if (pendingSaveId) return;
@@ -1682,6 +1934,21 @@ window.addEventListener("message", event => {{
     if (!result || result.event_id !== pendingSaveId) return;
     pendingSaveId = null;
     board.style.pointerEvents = "";
+    if (pendingColumnRename || pendingColumnAdd) {{
+        const editor = pendingColumnRename || pendingColumnAdd;
+        pendingColumnRename = null;
+        pendingColumnAdd = null;
+        editor.input.disabled = false;
+        if (result.ok) {{
+            editor.input.hidden = true;
+            editor.title.hidden = false;
+        }} else {{
+            editor.error.textContent = result.error;
+            editor.input.setAttribute("aria-invalid", "true");
+            editor.input.focus();
+        }}
+        return;
+    }}
     document.getElementById("edit-save").disabled = false;
     document.getElementById("edit-save").textContent = "Save changes";
     if (result.ok) {{
@@ -1924,16 +2191,209 @@ function createAddTaskButton(status, inHeader = false) {{
     return button;
 }}
 
+function createColumnTitle(status) {{
+    const wrapper = document.createElement("div");
+    wrapper.className = "column-title-wrap";
+    const title = document.createElement("button");
+    title.type = "button";
+    title.className = "column-title";
+    title.draggable = true;
+    title.textContent = status;
+    title.title = "Click to rename column";
+    title.setAttribute("aria-label", `Rename column ${{status}}`);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "column-title-input";
+    input.setAttribute("aria-label", `Column name for ${{status}}`);
+    input.hidden = true;
+    const error = document.createElement("div");
+    error.className = "column-title-error";
+    error.setAttribute("role", "alert");
+
+    function cancel() {{
+        input.hidden = true;
+        title.hidden = false;
+        error.textContent = "";
+        input.removeAttribute("aria-invalid");
+    }}
+    function save() {{
+        if (input.hidden || pendingSaveId) return;
+        const name = input.value.trim().replace(/\\s+/g, " ");
+        error.textContent = "";
+        input.removeAttribute("aria-invalid");
+        if (name === status) {{ cancel(); return; }}
+        if (!name || data.statuses.includes(name)) {{
+            error.textContent = name ? "Column names must be unique." : "Enter a column name.";
+            input.setAttribute("aria-invalid", "true");
+            return;
+        }}
+        pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
+        pendingColumnRename = {{input, title, error}};
+        input.disabled = true;
+        board.style.pointerEvents = "none";
+        window.parent.postMessage({{
+            type: "planner:rename-column",
+            value: {{action: "rename_column", status, name, event_id: pendingSaveId}},
+        }}, "*");
+    }}
+    title.addEventListener("click", () => {{
+        if (pendingSaveId || Date.now() < suppressColumnClickUntil) return;
+        title.hidden = true;
+        input.hidden = false;
+        input.value = status;
+        input.focus();
+        input.select();
+    }});
+    input.addEventListener("keydown", event => {{
+        if (event.key === "Enter") {{ event.preventDefault(); save(); }}
+        if (event.key === "Escape") {{
+            event.preventDefault();
+            event.stopPropagation();
+            cancel();
+            title.focus();
+        }}
+    }});
+    input.addEventListener("blur", save);
+    wrapper.append(title, input, error);
+    return wrapper;
+}}
+
+function clearColumnDrag() {{
+    board.querySelectorAll(".column-dragging, .column-drop-before, .column-drop-after").forEach(element => {{
+        element.classList.remove("column-dragging", "column-drop-before", "column-drop-after");
+    }});
+    draggedColumn = null;
+}}
+
+function enableColumnDrop(element, status) {{
+    element.addEventListener("dragover", event => {{
+        if (!draggedColumn || draggedColumn === status || pendingSaveId) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        const rect = element.getBoundingClientRect();
+        const after = event.clientX > rect.left + rect.width / 2;
+        element.classList.toggle("column-drop-before", !after);
+        element.classList.toggle("column-drop-after", after);
+    }});
+    element.addEventListener("dragleave", () => {{
+        element.classList.remove("column-drop-before", "column-drop-after");
+    }});
+    element.addEventListener("drop", event => {{
+        if (!draggedColumn || pendingSaveId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const moving = draggedColumn;
+        const rect = element.getBoundingClientRect();
+        const position = event.clientX > rect.left + rect.width / 2 ? "after" : "before";
+        clearColumnDrag();
+        if (moving === status) return;
+        pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
+        board.style.pointerEvents = "none";
+        document.getElementById("save-error").textContent = "";
+        window.parent.postMessage({{
+            type: "planner:column-action",
+            value: {{action: "move_column", status: moving, target: status, position, event_id: pendingSaveId}},
+        }}, "*");
+    }});
+}}
+
+function createAddColumnHeader() {{
+    const header = document.createElement("div");
+    header.className = "add-column-header";
+    const title = document.createElement("button");
+    title.type = "button";
+    title.className = "add-column-button";
+    title.textContent = "+ Add column";
+    const form = document.createElement("div");
+    form.hidden = true;
+    const input = document.createElement("input");
+    input.className = "column-title-input";
+    input.placeholder = "Column name";
+    input.setAttribute("aria-label", "New column name");
+    const error = document.createElement("div");
+    error.className = "column-title-error";
+    error.setAttribute("role", "alert");
+    const actions = document.createElement("div");
+    actions.className = "add-column-actions";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "primary";
+    save.textContent = "Add column";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    function close() {{
+        if (pendingSaveId) return;
+        form.hidden = true;
+        title.hidden = false;
+        error.textContent = "";
+        input.value = "";
+    }}
+    function submit() {{
+        if (pendingSaveId) return;
+        const name = input.value.trim().replace(/\\s+/g, " ");
+        if (!name || data.statuses.includes(name)) {{
+            error.textContent = name ? "This column already exists." : "Enter a column name.";
+            return;
+        }}
+        pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
+        pendingColumnAdd = {{input, title, error}};
+        input.disabled = true;
+        board.style.pointerEvents = "none";
+        window.parent.postMessage({{
+            type: "planner:column-action",
+            value: {{action: "add_column", name, event_id: pendingSaveId}},
+        }}, "*");
+    }}
+    title.addEventListener("click", () => {{
+        if (pendingSaveId) return;
+        title.hidden = true;
+        form.hidden = false;
+        input.focus();
+    }});
+    save.addEventListener("click", submit);
+    cancel.addEventListener("click", close);
+    input.addEventListener("keydown", event => {{
+        if (event.key === "Enter") {{ event.preventDefault(); submit(); }}
+        if (event.key === "Escape") {{ event.preventDefault(); close(); title.focus(); }}
+    }});
+    actions.append(save, cancel);
+    form.append(input, error, actions);
+    header.append(title, form);
+    board.appendChild(header);
+}}
+
 function createColumnHeader(status) {{
     const header = document.createElement("div");
     const taskCount = data.tasks.filter(task => task.status === status).length;
     header.className = "column-header";
     header.dataset.status = status;
+    header.draggable = true;
+    header.title = "Drag to move this column; click its title to rename";
+    header.addEventListener("dragstart", event => {{
+        if (pendingSaveId || !header.querySelector(".column-title-input").hidden
+                || event.target.closest("input, .header-add-task")) {{
+            event.preventDefault();
+            return;
+        }}
+        draggedColumn = status;
+        draggedId = null;
+        suppressColumnClickUntil = Date.now() + 500;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-kanban-column", status);
+        header.classList.add("column-dragging");
+        board.querySelectorAll(".dropzone").forEach(zone => {{
+            if (zone.dataset.status === status) zone.classList.add("column-dragging");
+        }});
+    }});
+    header.addEventListener("dragend", () => {{
+        suppressColumnClickUntil = Date.now() + 200;
+        clearColumnDrag();
+    }});
+    enableColumnDrop(header, status);
     header.style.setProperty("--status-accent", statusAccent(status));
 
-    const title = document.createElement("span");
-    title.className = "column-title";
-    title.textContent = status;
+    const title = createColumnTitle(status);
 
     const count = document.createElement("span");
     count.className = "column-count";
@@ -2223,11 +2683,13 @@ function createDropzone(status) {{
     zone.dataset.status = status;
 
     zone.addEventListener("dragover", event => {{
+        if (draggedColumn) return;
         event.preventDefault();
         zone.classList.add("drag-over");
     }});
     zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
     zone.addEventListener("drop", event => {{
+        if (draggedColumn) return;
         event.preventDefault();
         zone.classList.remove("drag-over");
         const cardId = event.dataTransfer.getData("text/plain") || draggedId;
@@ -2239,6 +2701,7 @@ function createDropzone(status) {{
         persistTask(task, {{status}});
     }});
 
+    enableColumnDrop(zone, status);
     return zone;
 }}
 
@@ -2383,12 +2846,9 @@ document.addEventListener("keydown", event => {{
 
 function renderBoard() {{
     board.replaceChildren();
-    if (!data.statuses.length) {{
-        board.textContent = "Select a status column to display the board.";
-        return;
-    }}
-    board.style.setProperty("--column-count", data.statuses.length);
+    board.style.setProperty("--column-count", data.statuses.length + 1);
     data.statuses.forEach(status => createColumnHeader(status));
+    createAddColumnHeader();
     data.statuses.forEach(status => {{
         const zone = createDropzone(status);
         data.tasks
@@ -2397,6 +2857,9 @@ function renderBoard() {{
         zone.appendChild(createAddTaskButton(status));
         board.appendChild(zone);
     }});
+    const spacer = document.createElement("div");
+    spacer.className = "add-column-space";
+    board.appendChild(spacer);
 }}
 
 renderBoard();
@@ -2434,12 +2897,25 @@ for project_id in project_ids:
     st.session_state.project_colors.setdefault(project_id, default_project_color(project_id))
 users = st.session_state.users
 
-with st.sidebar:
-    st.header("Filters")
-    selected_project_ids = st.multiselect("Project ID", project_ids, default=project_ids)
-    selected_people = st.multiselect("Responsible rows", people, default=people)
-    selected_statuses = st.multiselect("Status columns", statuses, default=statuses)
+toolbar_actions, toolbar_filters = st.columns([6, 1])
+with toolbar_actions:
+    if st.button("Attach files"):
+        attach_files_dialog()
+with toolbar_filters:
+    with st.popover("Filter", icon=":material/filter_list:", width="stretch"):
+        st.markdown("**Filter**")
+        filter_keyword = st.text_input("Keyword", placeholder="Enter a keyword…", key="filter_keyword")
+        filter_members = st.multiselect("Members", ["No members", *users], key="filter_members", placeholder="Any member")
+        selected_statuses = st.multiselect("Card status", statuses, default=statuses, key="status_filter")
+        filter_due = st.selectbox("Due date", [
+            "Any date", "No date", "Overdue", "Due today", "Due in the next day",
+            "Due in the next week", "Due in the next month",
+        ], key="filter_due")
+        selected_project_ids = st.multiselect("Projects", project_ids, default=project_ids, key="filter_projects")
+        selected_people = st.multiselect("Responsible roles", people, default=people, key="filter_owners")
+        st.button("Clear filters", on_click=reset_board_filters, width="stretch")
 
+with st.sidebar:
     st.download_button(
         "Download actions CSV",
         data=task_database_csv_bytes(),
@@ -2480,7 +2956,7 @@ with st.sidebar:
         proposed_status_names = []
         for index, status in enumerate(statuses):
             proposed_status_names.append(
-                st.text_input(f"Column {index + 1}", value=status, key=f"column_name_{index}")
+                st.text_input(f"Column {index + 1}", value=status, key=f"column_name_{index}_{status}")
             )
 
         rename_columns_submitted = st.form_submit_button("Apply column names")
@@ -2613,6 +3089,7 @@ filtered_tasks = [
     if task["project_id"] in selected_project_ids
     and task["owner"] in selected_people
     and task["status"] in selected_statuses
+    and task_matches_filters(task, filter_keyword, filter_members, filter_due)
 ]
 
 quality_todo_tasks = [
@@ -2629,9 +3106,6 @@ if new_task_request:
         initial_status=new_task_request["status"],
         form_key=f"add_task_{new_task_request['event_id']}",
     )
-if st.button("Attach files"):
-    attach_files_dialog()
-
 if st.session_state.pop("show_added_task_dialog", False):
     task_added_dialog()
 
