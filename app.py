@@ -35,6 +35,7 @@ APP_ICON_PATH = Path(__file__).parent / "assets" / "project_planner_icon.png"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"
 TASK_DATABASE_CSV = Path(__file__).parent / "project_planner_actions.csv"
 BOARD_COLUMNS_JSON = Path(__file__).parent / "board_columns.json"
+BOARD_LABELS_JSON = Path(__file__).parent / "board_labels.json"
 TASK_CSV_FIELDS = [
     "id",
     "title",
@@ -47,6 +48,7 @@ TASK_CSV_FIELDS = [
     "description",
     "attachments",
     "email_notification",
+    "labels",
 ]
 
 # Demo seed data used when no CSV task database exists yet.
@@ -178,6 +180,7 @@ def task_from_csv_row(row: dict[str, str]) -> dict[str, object]:
         "project": row.get("project", "Unassigned project"),
         "description": row.get("description", "No additional details provided."),
         "attachments": attachments,
+        "labels": csv_json_list(row.get("labels", "")),
         "email_notification": row.get("email_notification", "").strip().lower() in {"1", "true", "yes"},
     }
     return task
@@ -210,6 +213,7 @@ def task_to_csv_row(task: dict[str, object]) -> dict[str, str]:
         "project": str(task.get("project", "")),
         "description": str(task.get("description", "")),
         "attachments": json.dumps(task.get("attachments", []), ensure_ascii=False),
+        "labels": json.dumps(task.get("labels", []), ensure_ascii=False),
         "email_notification": "true" if task.get("email_notification") else "false",
     }
 
@@ -261,11 +265,11 @@ def apply_board_edit(event: object) -> None:
         updates = event.get("updates")
         if not isinstance(updates, dict) or not updates:
             raise ValueError("No ticket changes were received.")
-        allowed = {"title", "project_id", "project", "responsible_emails", "status", "due", "description", "attachments"}
+        allowed = {"title", "project_id", "project", "responsible_emails", "status", "due", "description", "attachments", "labels"}
         if set(updates) - allowed:
             raise ValueError("The ticket contains unsupported changes.")
         for field, value in updates.items():
-            if field in {"responsible_emails", "attachments"}:
+            if field in {"responsible_emails", "attachments", "labels"}:
                 if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
                     raise ValueError(f"Invalid {field} value.")
             elif not isinstance(value, str):
@@ -280,7 +284,22 @@ def apply_board_edit(event: object) -> None:
             raise ValueError("Task title and project name are required.")
         task["responsible_emails"] = clean_responsible_emails(task["responsible_emails"])
         task["responsible_email"] = ", ".join(task["responsible_emails"])
-        write_tasks_to_csv(tasks)
+        previous_labels = load_board_labels()
+        label_changes = event.get("label_changes", [])
+        labels = merge_board_labels(previous_labels, label_changes)
+        if "labels" in updates:
+            task["labels"] = list(dict.fromkeys(task["labels"]))
+            if set(task["labels"]) - {label["id"] for label in labels}:
+                raise ValueError("A selected label no longer exists. Reload the board.")
+        labels_changed = labels != previous_labels
+        if labels_changed:
+            write_board_labels(labels)
+        try:
+            write_tasks_to_csv(tasks)
+        except OSError:
+            if labels_changed:
+                write_board_labels(previous_labels)
+            raise
         st.session_state.tasks = tasks
         st.session_state.board_save_result = {"event_id": event_id, "ok": True}
     except (OSError, ValueError) as error:
@@ -288,6 +307,50 @@ def apply_board_edit(event: object) -> None:
             "event_id": event_id, "ok": False,
             "error": f"Ticket was not saved: {error}",
         }
+
+
+def merge_board_labels(existing: list[dict], changes: object) -> list[dict]:
+    if not isinstance(changes, list):
+        raise ValueError("Invalid label changes.")
+    merged = {label["id"]: label.copy() for label in existing}
+    for label in changes:
+        if not isinstance(label, dict) or set(label) != {"id", "name", "color"}:
+            raise ValueError("Invalid label definition.")
+        if any(not isinstance(label[key], str) for key in ("id", "name", "color")):
+            raise ValueError("Invalid label definition.")
+        name = normalize_name(label["name"])
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", label["id"]):
+            raise ValueError("Invalid label ID.")
+        if not name or len(name) > 80:
+            raise ValueError("Label names must contain 1 to 80 characters.")
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", label["color"]):
+            raise ValueError("Choose a valid label color.")
+        merged[label["id"]] = {"id": label["id"], "name": name, "color": label["color"].lower()}
+    names = [label["name"].casefold() for label in merged.values()]
+    if len(names) != len(set(names)):
+        raise ValueError("Label names must be unique.")
+    return list(merged.values())
+
+
+def load_board_labels() -> list[dict]:
+    if not BOARD_LABELS_JSON.exists():
+        return []
+    return merge_board_labels([], json.loads(BOARD_LABELS_JSON.read_text(encoding="utf-8")))
+
+
+def write_board_labels(labels: list[dict]) -> None:
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=BOARD_LABELS_JSON.parent, delete=False,
+        ) as file:
+            temporary_path = Path(file.name)
+            json.dump(labels, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        os.replace(temporary_path, BOARD_LABELS_JSON)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def load_board_columns() -> list[str]:
@@ -1058,6 +1121,7 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
     ]
     board_data = {
         "statuses": statuses,
+        "labels": load_board_labels(),
         "users": st.session_state.users,
         "project_colors": project_color_payload(),
         "tasks": board_tasks,
@@ -1451,6 +1515,28 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
         line-height: 1.2;
         margin: 0 0 14px;
     }}
+
+    .task-label-section {{ position: relative; }}
+    .label-chips {{ display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }}
+    .label-chip {{ display: inline-block; padding: 5px 10px; border-radius: 4px; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }}
+    .labels-button, .labels-wide-button, .label-editor-actions button {{ background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 10px; color: #334155; cursor: pointer; }}
+    .labels-button:hover, .labels-wide-button:hover {{ background: #e2e8f0; }}
+    .labels-popover {{ position: absolute; z-index: 30; top: 100%; left: 0; width: min(310px, 100%); box-sizing: border-box; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px #0f172a33; }}
+    .labels-heading {{ display: flex; justify-content: space-between; align-items: center; color: #475569; margin-bottom: 8px; }}
+    .labels-heading button, .label-edit {{ cursor: pointer; background: none; border: 0; font-size: 18px; color: #475569; padding: 4px; }}
+    #labels-options {{ max-height: 200px; overflow-y: auto; margin: 8px 0; }}
+    .label-option {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }}
+    .label-option label {{ display: flex; align-items: center; gap: 8px; flex: 1; cursor: pointer; min-width: 0; }}
+    .form-grid .label-option input {{ width: 16px; height: 16px; margin: 0; flex-shrink: 0; }}
+    .label-option .label-chip {{ flex: 1; }}
+    .labels-wide-button {{ width: 100%; margin-top: 8px; }}
+    .label-colors {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 8px 0; }}
+    .label-colors button {{ min-height: 30px; border: 2px solid transparent; border-radius: 4px; cursor: pointer; }}
+    .label-colors button[aria-pressed="true"] {{ border-color: #172b4d; outline: 2px solid #fff; outline-offset: -4px; }}
+    .label-color-title {{ margin-top: 10px; color: #334155; font-size: 12px; font-weight: 800; }}
+    .label-editor-actions {{ display: flex; gap: 8px; margin-top: 10px; }}
+    #label-error {{ color: #b91c1c; font-size: 12px; margin-top: 6px; }}
+    .label-patterns .label-chip {{ background-image: repeating-linear-gradient(135deg, transparent 0 7px, #ffffff44 7px 10px); }}
     .modal-layout {{
         display: grid;
         gap: 18px;
@@ -1817,8 +1903,6 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
             <div class="modal-main">
                 <div class="form-grid">
                     <label>Task title<input id="edit-title" type="text"></label>
-                    <label>Project ID<input id="edit-project-id" type="text"></label>
-                    <label>Project name<input id="edit-project" type="text"></label>
                     <div class="field-label">Responsible people
                         <div class="responsible-multiselect" id="edit-responsible-people">
                             <div id="responsible-control" class="responsible-control" tabindex="0" role="button" aria-expanded="false">
@@ -1839,6 +1923,28 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
                     <label>Column/status<select id="edit-status"></select></label>
                     <label>Due date<input id="edit-due" type="date"></label>
                     <label>Details<textarea id="edit-description"></textarea></label>
+                    <div class="task-label-section" id="task-label-section">
+                        <div id="selected-labels" class="label-chips" aria-label="Selected labels"></div>
+                        <button type="button" id="labels-toggle" class="labels-button" aria-expanded="false" aria-controls="labels-popover">◇ Labels</button>
+                        <section id="labels-popover" class="labels-popover" hidden aria-label="Labels">
+                            <div class="labels-heading"><strong>Labels</strong><button type="button" id="labels-close" aria-label="Close labels">×</button></div>
+                            <div id="labels-list-view">
+                                <input id="labels-search" type="search" placeholder="Search labels…" aria-label="Search labels">
+                                <div id="labels-options"></div>
+                                <button type="button" id="label-create" class="labels-wide-button">Create a new label</button>
+                            </div>
+                            <div id="label-editor" hidden>
+                                <label>Label name<input id="label-name" type="text" maxlength="80"></label>
+                                <div class="label-color-title">Color</div>
+                                <div id="label-colors" class="label-colors" role="group" aria-label="Label color"></div>
+                                <div id="label-preview" class="label-chip"></div>
+                                <div class="label-editor-actions"><button type="button" id="label-apply">Apply label</button><button type="button" id="label-back">Back</button></div>
+                                <div id="label-error" role="alert"></div>
+                            </div>
+                            <button type="button" id="labels-patterns" class="labels-wide-button" aria-pressed="false">Enable colorblind friendly mode</button>
+                            <p class="modal-note">Click Save changes to save labels and selections. Editing a label updates it across the board.</p>
+                        </section>
+                    </div>
                     <label>Attached files<textarea id="edit-attachments" placeholder="One file name or link per line"></textarea></label>
                     <div id="edit-attachment-links" class="attachment-list"></div>
                     <div class="modal-note">Saved files and links can be opened from this list.</div>
@@ -1884,7 +1990,154 @@ let draggedColumn = null;
 let suppressColumnClickUntil = 0;
 let pendingColumnAdd = null;
 
-function persistTask(task, updates) {{
+
+let editingLabelIds = [];
+let editingLabelCatalog = [];
+let editingLabelChanges = {{}};
+let editingLabelId = null;
+let chosenLabelColor = "#4bce97";
+const labelPalette = [
+    ["Green", "#4bce97"], ["Yellow", "#f5cd47"], ["Orange", "#fea362"],
+    ["Red", "#f87168"], ["Purple", "#9f8fef"], ["Blue", "#579dff"],
+    ["Sky", "#6cc3e0"], ["Lime", "#94c748"], ["Pink", "#e774bb"], ["Gray", "#b6c2cf"],
+];
+let labelPatterns = false;
+try {{ labelPatterns = localStorage.getItem("planner-label-patterns") === "true"; }} catch (_) {{}}
+function applyLabelPatterns() {{
+    document.body.classList.toggle("label-patterns", labelPatterns);
+    const button = document.getElementById("labels-patterns");
+    button.setAttribute("aria-pressed", String(labelPatterns));
+    button.textContent = `${{labelPatterns ? "Disable" : "Enable"}} colorblind friendly mode`;
+}}
+function labelChip(label) {{
+    const chip = document.createElement("span");
+    chip.className = "label-chip";
+    chip.textContent = label.name;
+    chip.style.backgroundColor = label.color;
+    // Use a contrasting text color even for labels imported with a custom color.
+    const rgb = label.color.slice(1).match(/../g).map(value => parseInt(value, 16) / 255);
+    const linear = rgb.map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    chip.style.color = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] > 0.179 ? "#000000" : "#ffffff";
+    return chip;
+}}
+function renderTaskLabels(container, ids, catalog = data.labels) {{
+    container.replaceChildren();
+    (ids || []).forEach(id => {{
+        const label = catalog.find(value => value.id === id);
+        if (label) container.appendChild(labelChip(label));
+    }});
+}}
+function setLabelsOpen(open) {{
+    document.getElementById("labels-popover").hidden = !open;
+    document.getElementById("labels-toggle").setAttribute("aria-expanded", String(open));
+    if (open) {{
+        document.getElementById("label-editor").hidden = true;
+        document.getElementById("labels-list-view").hidden = false;
+        document.getElementById("labels-search").focus();
+        renderLabelOptions();
+    }}
+}}
+function renderLabelOptions() {{
+    renderTaskLabels(document.getElementById("selected-labels"), editingLabelIds, editingLabelCatalog);
+    const options = document.getElementById("labels-options");
+    options.replaceChildren();
+    const query = document.getElementById("labels-search").value.trim().toLocaleLowerCase();
+    editingLabelCatalog.filter(label => label.name.toLocaleLowerCase().includes(query)).forEach(label => {{
+        const row = document.createElement("div");
+        row.className = "label-option";
+        const choice = document.createElement("label");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = editingLabelIds.includes(label.id);
+        checkbox.addEventListener("change", () => {{
+            editingLabelIds = checkbox.checked ? uniqueValues([...editingLabelIds, label.id]) : editingLabelIds.filter(id => id !== label.id);
+            renderTaskLabels(document.getElementById("selected-labels"), editingLabelIds, editingLabelCatalog);
+        }});
+        choice.append(checkbox, labelChip(label));
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "label-edit";
+        edit.textContent = "✎";
+        edit.setAttribute("aria-label", `Edit label ${{label.name}}`);
+        edit.addEventListener("click", () => openLabelEditor(label));
+        row.append(choice, edit);
+        options.appendChild(row);
+    }});
+    if (!options.childElementCount) {{
+        const empty = document.createElement("p");
+        empty.className = "modal-note";
+        empty.textContent = query ? "No matching labels." : "No labels yet. Create your first label.";
+        options.appendChild(empty);
+    }}
+}}
+function updateLabelPreview() {{
+    const preview = document.getElementById("label-preview");
+    preview.replaceChildren(labelChip({{name: document.getElementById("label-name").value.trim() || "Label preview", color: chosenLabelColor}}));
+}}
+function openLabelEditor(label = null) {{
+    editingLabelId = label?.id || null;
+    chosenLabelColor = label?.color || labelPalette[0][1];
+    document.getElementById("labels-list-view").hidden = true;
+    document.getElementById("label-editor").hidden = false;
+    document.getElementById("label-error").textContent = "";
+    document.getElementById("label-name").value = label?.name || "";
+    const colors = document.getElementById("label-colors");
+    colors.replaceChildren();
+    labelPalette.forEach(([name, color]) => {{
+        const button = document.createElement("button");
+        button.type = "button";
+        button.style.backgroundColor = color;
+        button.setAttribute("aria-label", name);
+        button.setAttribute("aria-pressed", String(color === chosenLabelColor));
+        button.addEventListener("click", () => {{
+            chosenLabelColor = color;
+            colors.querySelectorAll("button").forEach(item => item.setAttribute("aria-pressed", String(item === button)));
+            updateLabelPreview();
+        }});
+        colors.appendChild(button);
+    }});
+    updateLabelPreview();
+    document.getElementById("label-name").focus();
+}}
+function applyLabelEditor() {{
+    const name = document.getElementById("label-name").value.trim().replace(/\\s+/g, " ");
+    const error = document.getElementById("label-error");
+    if (!name || name.length > 80) {{ error.textContent = "Enter a label name (1–80 characters)."; return; }}
+    if (editingLabelCatalog.some(label => label.id !== editingLabelId && label.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {{
+        error.textContent = "A label with this name already exists."; return;
+    }}
+    const id = editingLabelId || globalThis.crypto?.randomUUID?.() || `label-${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
+    const label = {{id, name, color: chosenLabelColor}};
+    editingLabelCatalog = [...editingLabelCatalog.filter(item => item.id !== id), label];
+    editingLabelChanges[id] = label;
+    if (!editingLabelId) editingLabelIds = uniqueValues([...editingLabelIds, id]);
+    document.getElementById("labels-search").value = "";
+    setLabelsOpen(true);
+}}
+document.getElementById("labels-toggle").addEventListener("click", () => setLabelsOpen(document.getElementById("labels-popover").hidden));
+document.getElementById("labels-close").addEventListener("click", () => {{ setLabelsOpen(false); document.getElementById("labels-toggle").focus(); }});
+document.getElementById("labels-search").addEventListener("input", renderLabelOptions);
+document.getElementById("label-create").addEventListener("click", () => openLabelEditor());
+document.getElementById("label-apply").addEventListener("click", applyLabelEditor);
+document.getElementById("label-back").addEventListener("click", () => setLabelsOpen(true));
+document.getElementById("label-name").addEventListener("input", updateLabelPreview);
+document.getElementById("label-name").addEventListener("keydown", event => {{
+    if (event.key === "Enter") {{ event.preventDefault(); applyLabelEditor(); }}
+}});
+document.getElementById("labels-patterns").addEventListener("click", () => {{
+    labelPatterns = !labelPatterns;
+    try {{ localStorage.setItem("planner-label-patterns", String(labelPatterns)); }} catch (_) {{}}
+    applyLabelPatterns();
+}});
+document.getElementById("labels-popover").addEventListener("keydown", event => {{
+    if (event.key === "Escape") {{ event.stopPropagation(); setLabelsOpen(false); document.getElementById("labels-toggle").focus(); }}
+}});
+document.addEventListener("click", event => {{
+    if (!document.getElementById("task-label-section").contains(event.target)) setLabelsOpen(false);
+}});
+applyLabelPatterns();
+
+function persistTask(task, updates, labelChanges = []) {{
     if (pendingSaveId) return;
     pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
     document.getElementById("save-error").textContent = "";
@@ -1893,7 +2146,7 @@ function persistTask(task, updates) {{
     document.getElementById("edit-save").textContent = "Saving…";
     board.style.pointerEvents = "none";
     window.parent.postMessage({{
-        type: "planner:save", value: {{event_id: pendingSaveId, task_id: task.id, updates}},
+        type: "planner:save", value: {{event_id: pendingSaveId, task_id: task.id, updates, label_changes: labelChanges}},
     }}, "*");
 }}
 
@@ -2591,12 +2844,12 @@ function updateCardFromTask(card, task) {{
     }}
     renderDueDate(card.querySelector(".due-current"), task.due);
     renderAssignees(card.querySelector(".task-assignees"), task);
+    renderTaskLabels(card.querySelector(".task-labels"), task.labels);
     const projectBadge = card.querySelector(".task-project-id-badge");
     if (projectBadge) {{
         projectBadge.textContent = text(task.project_id);
         applyProjectBadgeColor(projectBadge, task.project_id);
     }}
-    card.querySelector(".project-id-detail").textContent = text(task.project_id);
     card.querySelector(".responsible-email").textContent = responsibleEmailsText(task) || "No responsible person selected";
     card.querySelector(".status").textContent = text(task.status);
     card.querySelector(".description").textContent = text(task.description);
@@ -2622,13 +2875,13 @@ function createTaskCard(task) {{
         <details>
             <summary>Details</summary>
             <div class="task-details">
-                <strong>Project ID:</strong> <span class="project-id-detail"></span><br>
                 <strong>Responsible:</strong> <span class="responsible-email"></span><br>
                 <strong>Status:</strong> <span class="status"></span><br>
                 <strong>Description:</strong> <span class="description"></span><br>
                 <strong>Attachments:</strong> <span class="attachments attachment-list"></span>
             </div>
         </details>
+        <div class="task-labels label-chips" aria-label="Task labels"></div>
     `;
     updateCardFromTask(card, task);
 
@@ -2674,11 +2927,15 @@ function openEditModal(taskId) {{
     const task = findTask(taskId);
     if (!task) return;
     editingTaskId = taskId;
+    editingLabelIds = [...(task.labels || [])];
+    editingLabelCatalog = (data.labels || []).map(label => ({{...label}}));
+    editingLabelChanges = {{}};
+    document.getElementById("labels-search").value = "";
+    setLabelsOpen(false);
+    renderLabelOptions();
     document.getElementById("edit-save-error").textContent = "";
 
     document.getElementById("edit-title").value = text(task.title);
-    document.getElementById("edit-project-id").value = text(task.project_id);
-    document.getElementById("edit-project").value = text(task.project);
     renderResponsiblePicker(taskResponsibleEmails(task));
     fillSelect(document.getElementById("edit-status"), data.statuses, task.status);
     document.getElementById("edit-due").value = text(task.due);
@@ -2696,6 +2953,7 @@ function openEditModal(taskId) {{
 
 function closeEditModal() {{
     editingTaskId = null;
+    setLabelsOpen(false);
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
 }}
@@ -2709,8 +2967,6 @@ function saveEditedTask() {{
     }}
 
     task.title = document.getElementById("edit-title").value.trim() || task.title;
-    task.project_id = document.getElementById("edit-project-id").value.trim() || task.project_id;
-    task.project = document.getElementById("edit-project").value.trim() || task.project;
     task.responsible_emails = selectedResponsibleEmails();
     task.responsible_email = task.responsible_emails.join(", ");
     task.status = document.getElementById("edit-status").value;
@@ -2745,8 +3001,8 @@ function saveEditedTask() {{
         if (targetZone) targetZone.insertBefore(card, targetZone.querySelector(".column-add-task"));
     }}
     updateColumnCounts();
-    const fields = ["title", "project_id", "project", "responsible_emails", "status", "due", "description", "attachments"];
-    persistTask(task, Object.fromEntries(fields.map(field => [field, task[field]])));
+    const fields = ["title", "responsible_emails", "status", "due", "description", "attachments", "labels"];
+    persistTask(task, Object.fromEntries(fields.map(field => [field, field === "labels" ? [...editingLabelIds] : task[field]])), Object.values(editingLabelChanges));
 }}
 
 document.getElementById("responsible-control").addEventListener("click", () => {{

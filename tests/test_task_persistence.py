@@ -28,11 +28,13 @@ class TaskPersistenceTests(unittest.TestCase):
             csv=csv, json=json, os=os, re=re, tempfile=tempfile, Path=Path, uuid4=uuid4, date=date,
             st=SimpleNamespace(session_state=self.state),
             TASK_DATABASE_CSV=Path(self.directory.name) / 'tasks.csv',
+            BOARD_LABELS_JSON=Path(self.directory.name) / 'labels.json',
             BOARD_COLUMNS_JSON=Path(self.directory.name) / 'columns.json',
         )
         source = Path(__file__).resolve().parents[1] / 'app.py'
         tree = ast.parse(source.read_text(encoding='utf-8-sig'))
         functions = {
+            'merge_board_labels', 'load_board_labels', 'write_board_labels',
             'csv_json_list', 'task_from_csv_row', 'task_to_csv_row',
             'responsible_emails_list', 'load_tasks_from_csv',
             'write_tasks_to_csv', 'save_tasks_to_csv', 'apply_board_edit',
@@ -236,6 +238,78 @@ class TaskPersistenceTests(unittest.TestCase):
         empty = task | {'due': '', 'responsible_emails': []}
         self.assertTrue(matches(empty, members=['No members'], due_filter='No date', today=today))
         self.assertFalse(matches(task | {'due': 'invalid'}, due_filter='Overdue', today=today))
+
+    def test_labels_save_and_reload_without_changing_project(self):
+        label = dict(id='urgent', name='Urgent', color='#f87168')
+        self.namespace['apply_board_edit'](dict(
+            event_id='label-save', task_id='ticket-a',
+            updates={'labels': ['urgent', 'urgent'], 'title': 'Updated'}, label_changes=[label],
+        ))
+        self.assertTrue(self.state.board_save_result['ok'])
+        saved = self.namespace['load_tasks_from_csv']()[0]
+        self.assertEqual(saved['labels'], ['urgent'])
+        self.assertEqual(saved['project_id'], 'PRJ-001')
+        self.assertEqual(saved['project'], 'Demo')
+        self.assertEqual(self.namespace['load_board_labels'](), [label])
+        self.edit({'labels': []})
+        self.assertEqual(self.namespace['load_tasks_from_csv']()[0]['labels'], [])
+        self.assertEqual(self.namespace['load_board_labels'](), [label])
+
+    def test_shared_label_edit_preserves_assignments_and_other_labels(self):
+        self.namespace['write_board_labels']([
+            dict(id='urgent', name='Urgent', color='#f87168'),
+            dict(id='review', name='Review', color='#4bce97'),
+        ])
+        self.state.tasks[0]['labels'] = ['urgent']
+        self.state.tasks.append(self.state.tasks[0] | {'id': 'ticket-b'})
+        self.namespace['save_tasks_to_csv']()
+        self.namespace['apply_board_edit'](dict(
+            event_id='rename-label', task_id='ticket-a', updates={'labels': ['urgent']},
+            label_changes=[dict(id='urgent', name='Priority', color='#F5CD47')],
+        ))
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.assertEqual([t['labels'] for t in self.namespace['load_tasks_from_csv']()], [['urgent'], ['urgent']])
+        catalog = self.namespace['load_board_labels']()
+        self.assertEqual(catalog[0], dict(id='urgent', name='Priority', color='#f5cd47'))
+        self.assertEqual(catalog[1]['name'], 'Review')
+
+    def test_invalid_labels_leave_saved_data_unchanged(self):
+        original = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        cases = [
+            ({'labels': ['missing']}, []),
+            ({'labels': [123]}, []),
+            ({'labels': []}, [dict(id='x', name='', color='#4bce97')]),
+            ({'labels': []}, [dict(id='x', name='Review', color='red')]),
+            ({'labels': []}, [dict(id='x', name='Review', color='#4bce97'), dict(id='y', name=' review ', color='#4bce97')]),
+            ({'labels': []}, 'invalid'),
+        ]
+        for index, (updates, changes) in enumerate(cases):
+            with self.subTest(index=index):
+                self.namespace['apply_board_edit'](dict(event_id=str(index), task_id='ticket-a', updates=updates, label_changes=changes))
+                self.assertFalse(self.state.board_save_result['ok'])
+                self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original)
+                self.assertFalse(self.namespace['BOARD_LABELS_JSON'].exists())
+
+    def test_label_file_failure_prevents_ticket_changes(self):
+        original = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        with patch.dict(self.namespace, write_board_labels=lambda labels: (_ for _ in ()).throw(OSError('Disk full'))):
+            self.namespace['apply_board_edit'](dict(
+                event_id='fail-label', task_id='ticket-a', updates={'labels': ['x']},
+                label_changes=[dict(id='x', name='Review', color='#4bce97')],
+            ))
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original)
+
+    def test_ticket_failure_rolls_back_label_changes(self):
+        previous = [dict(id='x', name='Review', color='#4bce97')]
+        self.namespace['write_board_labels'](previous)
+        with patch.dict(self.namespace, write_tasks_to_csv=lambda tasks: (_ for _ in ()).throw(OSError('Disk full'))):
+            self.namespace['apply_board_edit'](dict(
+                event_id='fail-ticket', task_id='ticket-a', updates={'labels': ['x']},
+                label_changes=[dict(id='x', name='Ready', color='#f87168')],
+            ))
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['load_board_labels'](), previous)
 
     def test_clear_filters_restores_all_categories(self):
         self.state.project_ids = ['PRJ-001']

@@ -35,11 +35,17 @@ Assign responsible people to individual tasks using email addresses. Edit a task
 
 Cards show the task title, project, due date, and assignee initials. Open the task details or double-click a card to view or edit additional information, including:
 
-- Project ID and project name.
+- Colored labels.
 - Responsible people.
 - Status and due date.
 - Description.
 - Attached files, file paths, and document links.
+
+### Task Labels
+
+Open a task and click **Labels** below its Details field. Search the shared label list and check one or more labels, or choose **Create a new label**, enter a name, select a color, and click **Apply label**. Use the pencil beside a label to edit its name or color. **Save changes** saves the ticket’s selections and label edits; **Cancel** discards them. Editing a shared label updates its appearance on every ticket using it.
+
+Selected labels appear below the task details on cards. Uncheck a label to remove it from a ticket; it stays available for other tickets. The picker also has an optional colorblind-friendly display mode with patterns. Project ID and project name remain on the board and in storage, but are no longer fields in the task details editor.
 
 ### Using the Board
 
@@ -54,6 +60,7 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 
 - Shared Kanban board with drag-and-drop task cards.
 - Task creation and editing.
+- Shared colored labels with search, multiple selections, and inline creation and editing.
 - Due dates highlighted yellow from today through the next five days, and red when overdue, using the viewer’s local date.
 - Configurable status columns.
 - Multiple project IDs with customizable colors.
@@ -68,6 +75,7 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 - **Application:** Python and Streamlit, with an embedded HTML/CSS/JavaScript board.
 - **Task storage:** `project_planner_actions.csv` in the application directory.
 - **Column configuration:** `board_columns.json` in the application directory; include this file alongside the CSV when backing up the board.
+- **Labels:** `board_labels.json` stores shared label names and colors; the task CSV stores selected label IDs. Include both files in backups.
 - **Attachments:** Local files and references to file paths or document links.
 
 The application starts with sample tasks when no CSV task database exists. Saving a ticket writes its assignments and edited fields to the CSV; dragging a card saves its status. Saved changes survive page reloads. Existing CSV files receive stable ticket IDs automatically.
