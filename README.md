@@ -43,13 +43,13 @@ Cards show the task title, labels directly underneath, and then Details. Project
 
 ### Task Labels
 
-Open a task and click **Labels** below its title; the Details field follows the labels. Search the shared label list and check one or more labels, or choose **Create a new label**, enter a name, select a color, and click **Apply label**. Use the pencil beside a label to edit its name or color. **Save changes** saves the ticket’s selections and label edits; **Cancel** discards them. Editing a shared label updates its appearance on every ticket using it.
+Open a task and click **Labels** below its title; the Details field follows the labels. Search the shared label list and check one or more labels, or choose **Create a new label**, enter a name, select a color, and click **Apply label**. Use the pencil beside a label to edit its name or color. **Add task** (for a new ticket) or **Save changes** (when editing) saves the ticket’s selections and label edits; **Cancel** discards them. Editing a shared label updates its appearance on every ticket using it.
 
 Selected labels appear directly below the title and above Details on cards. Uncheck a label to remove it from a ticket; it stays available for other tickets. Project assignments remain stored, but Project ID badges and project fields are not shown in task details.
 
 ### Files, Links, and Folders
 
-Inside a task, use **Add link** for an HTTP/HTTPS address or an absolute folder path such as `C:\Program Files`, `\\server\share`, or `/srv/shared`. Use **Upload file** to select files from your computer (up to 50 files and 20 MB total per save). Click **Save changes** to persist additions or removals. The new-task form also saves actual uploaded file contents.
+Inside a task, use **Add link** for an HTTP/HTTPS address or an absolute folder path such as `C:\Program Files`, `\\server\share`, or `/srv/shared`. Use **Upload file** to select files from your computer (up to 50 files and 20 MB total per save). Click **Add task** or **Save changes** to persist additions or removals. Both use the same attachment controls and save actual uploaded file contents.
 
 The single list shows clickable web links and file downloads. PDFs, supported images, and text files also have an **Open** preview link. Local folders have a folder link and **Copy path**: browsers may block `file://` navigation from a web page, so paste the copied path into your file manager when needed. Folder paths refer to the viewer’s computer or network; they do not upload a folder to the server.
 
@@ -57,7 +57,7 @@ Old entries that contain only a filename without a saved file are marked unavail
 
 ### Using the Board
 
-1. Click **+** in a column header or **+ Add task** at the bottom of a column. Fill in the project, responsible people, and due date; the column status is selected automatically.
+1. Click **+** in a column header or **+ Add task** at the bottom of a column. Add task and Edit task use the same form: **Task title → Labels → Details → Responsible people → Column/status → Due date → Files and links**. The clicked column is selected automatically. Project ID and Project Name are not requested; older project assignments remain stored.
 2. Place planned work in Backlog / To Do.
 3. Move a card to In Progress when work starts.
 4. Update task details and attach supporting documents as needed.
@@ -67,7 +67,7 @@ Old entries that contain only a filename without a saved file are marked unavail
 ## Current Features
 
 - Shared Kanban board with drag-and-drop task cards.
-- Task creation and editing.
+- Task creation and editing through the same form, including label creation and file uploads.
 - Shared colored labels with search, multiple selections, and inline creation and editing.
 - Due dates highlighted yellow from today through the next five days, and red when overdue, using the viewer’s local date.
 - Configurable status columns.
@@ -90,7 +90,7 @@ The application starts with sample tasks when no CSV task database exists. Savin
 
 ## Email Notifications
 
-New tasks automatically notify all responsible email addresses after the ticket is saved. The confirmation dialog reports whether the SMTP server accepted the message, rejected recipients, or could not send it. Mail-server acceptance does not guarantee inbox delivery. Task creation still succeeds if sending fails; notifications are not automatically retried on reload. The CSV records the notification status.
+New tasks automatically notify all responsible email addresses after the ticket is saved. A notice above the board reports whether the SMTP server accepted the message, rejected recipients, or could not send it. Mail-server acceptance does not guarantee inbox delivery. Task creation still succeeds if sending fails; notifications are not automatically retried on reload. The CSV records the notification status.
 
 Copy [the SMTP example](.streamlit/secrets.toml.example) to `.streamlit/secrets.toml`, then enter your SMTP host, port, sender address, encryption mode, and credentials if your server requires login. The real secrets file is ignored by Git. `starttls` is the default; `ssl` and an explicitly configured `none` mode for a trusted relay are also supported. `app_url` adds a link to your board in the notification.
 

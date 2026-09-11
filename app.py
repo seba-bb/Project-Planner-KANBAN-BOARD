@@ -292,8 +292,8 @@ def apply_board_edit(event: object) -> None:
                 for reference in updates["attachments"]
             ))}
         task.update(updates)
-        if not task["title"].strip() or not task["project"].strip():
-            raise ValueError("Task title and project name are required.")
+        if not task["title"].strip():
+            raise ValueError("Task title is required.")
         task["responsible_emails"] = clean_responsible_emails(task["responsible_emails"])
         task["responsible_email"] = ", ".join(task["responsible_emails"])
         previous_labels = load_board_labels()
@@ -526,9 +526,8 @@ def on_board_change() -> None:
     if isinstance(event, dict) and event.get("action") == "rename_column":
         apply_column_rename(event)
         return
-    if isinstance(event, dict) and event.get("action") == "add_task":
-        if event.get("status") in st.session_state.statuses:
-            st.session_state.new_task_request = event
+    if isinstance(event, dict) and event.get("action") == "create_task":
+        apply_new_task(event)
         return
     apply_board_edit(event)
 
@@ -996,6 +995,7 @@ def add_task(
     description: str,
     attachments: list[str],
     uploaded_files: list[dict] | None = None,
+    label_ids: list[str] | None = None, label_changes: list[dict] | None = None,
 ) -> tuple[bool, str]:
     # Normalize user input at the boundary so downstream rendering can assume
     # required fields are present and human-readable.
@@ -1005,9 +1005,6 @@ def add_task(
 
     if not cleaned_title:
         return False, "Task title is required."
-
-    if not cleaned_project:
-        return False, "Project name is required."
 
     try:
         responsible_emails = clean_responsible_emails(responsible_emails)
@@ -1030,14 +1027,25 @@ def add_task(
         "email_notification_status": "pending",
     }
     saved_files = []
+    labels_written = False
     try:
+        previous_labels = load_board_labels()
+        catalog = merge_board_labels(previous_labels, label_changes or [])
+        task["labels"] = list(dict.fromkeys(label_ids or []))
+        if set(task["labels"]) - {label["id"] for label in catalog}:
+            raise ValueError("A selected label no longer exists. Reload the board.")
         task["attachments"] = [clean_attachment_link(link) for link in attachments]
         saved_files = save_uploaded_files(task["id"], uploaded_files or [])
         task["attachments"].extend(saved_files)
-        tasks = [*st.session_state.tasks, task]
+        tasks = [*load_tasks_from_csv(), task]
+        if catalog != previous_labels:
+            write_board_labels(catalog)
+            labels_written = True
         write_tasks_to_csv(tasks)
     except (OSError, ValueError) as error:
         cleanup_uploaded_files(saved_files)
+        if labels_written:
+            write_board_labels(previous_labels)
         return False, f"Task was not saved: {error}"
     st.session_state.tasks = tasks
     notification = send_new_task_notification(task)
@@ -1056,46 +1064,38 @@ def add_task(
     return True, f"Added task: {cleaned_title}."
 
 
-@st.dialog("Add task")
-def add_task_dialog(
-    project_ids: list[str], statuses: list[str], users: list[str],
-    initial_status: str | None = None, form_key: str = "add_task_dialog_form",
-) -> None:
-    with st.form(form_key):
-        task_title = st.text_input("Task title", placeholder="Prepare inspection report")
-        task_project_id = st.selectbox("Project ID", project_ids)
-        task_project = st.text_input("Project name", placeholder="NPI - Stamping Bracket")
-        responsible_emails = st.multiselect(
-            "Responsible people", users, default=users[:1], accept_new_options=True,
-            placeholder="Select people or enter a new email",
-            help="Type a new email address and press Enter to add it to this task.",
-        )
-        task_status = st.selectbox(
-            "Column/status", statuses,
-            index=statuses.index(initial_status) if initial_status in statuses else 0,
-        )
-        task_due = st.date_input("Due date")
-        task_description = st.text_area("Details", placeholder="Additional task information")
-        task_link = st.text_input("Add link", placeholder="https://…")
-        uploaded_files = st.file_uploader("Upload file", accept_multiple_files=True, help="20 MB total per save.")
-        submitted = st.form_submit_button("Add task")
-
-    if submitted:
+def apply_new_task(event: dict) -> None:
+    event_id = event.get("event_id")
+    if not isinstance(event_id, str) or st.session_state.get("board_save_result", {}).get("event_id") == event_id:
+        return
+    try:
+        updates = event.get("updates")
+        allowed = {"title", "responsible_emails", "status", "due", "description", "attachments", "labels"}
+        if not isinstance(updates, dict) or set(updates) != allowed:
+            raise ValueError("The new task contains invalid fields.")
+        for field, value in updates.items():
+            if field in {"responsible_emails", "attachments", "labels"}:
+                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                    raise ValueError(f"Invalid {field} value.")
+            elif not isinstance(value, str):
+                raise ValueError(f"Invalid {field} value.")
+        if updates["status"] not in st.session_state.statuses:
+            raise ValueError("Choose an existing column.")
+        if updates["due"]:
+            date.fromisoformat(updates["due"])
+        changes = event.get("label_changes", [])
+        if not isinstance(changes, list):
+            raise ValueError("Invalid label changes.")
         success, message = add_task(
-            task_title,
-            task_project_id,
-            task_project,
-            responsible_emails,
-            task_status,
-            task_due.isoformat(),
-            task_description,
-            [task_link.strip()] if task_link.strip() else [],
-            uploaded_files=upload_payload(uploaded_files),
+            updates["title"], "", "", updates["responsible_emails"], updates["status"],
+            updates["due"], updates["description"], updates["attachments"],
+            uploaded_files=event.get("uploaded_files", []), label_ids=updates["labels"], label_changes=changes,
         )
+        st.session_state.board_save_result = {"event_id": event_id, "ok": success, "error": "" if success else message}
         if success:
-            st.session_state.show_added_task_dialog = True
-            st.rerun()
-        st.error(message)
+            st.session_state.show_task_created_notice = True
+    except (ValueError, OSError) as error:
+        st.session_state.board_save_result = {"event_id": event_id, "ok": False, "error": f"Task was not saved: {error}"}
 
 
 @st.dialog("Attach files to task")
@@ -1169,33 +1169,6 @@ def manage_people_emails_dialog() -> None:
             st.success(message)
             st.rerun()
         st.error(message)
-
-@st.dialog("Task added")
-def task_added_dialog() -> None:
-    task = st.session_state.get("last_added_task")
-    if not task:
-        st.write("Task was added.")
-    else:
-        st.write("The task was added to the board.")
-        st.markdown(f"**Task title:** {escape(task['title'])}")
-        st.markdown(f"**Project ID:** {escape(task['project_id'])}")
-        st.markdown(f"**Project name:** {escape(task['project'])}")
-        st.markdown(f"**Responsible:** {escape(responsible_emails_text(task))}")
-        st.markdown(f"**Column/status:** {escape(task['status'])}")
-        st.markdown(f"**Due date:** {escape(task['due'])}")
-        attachment_names = ", ".join(task.get("attachments", [])) or "No files attached"
-        st.markdown(f"**Details:** {escape(task['description'])}")
-        st.markdown(f"**Attachments:** {escape(attachment_names)}")
-        notification = st.session_state.get("last_notification_result", {})
-        if notification.get("status") == "sent":
-            st.success(notification["message"])
-        elif notification:
-            st.warning(notification["message"])
-
-    if st.button("Close", key="close_added_task_dialog"):
-        st.session_state.show_added_task_dialog = False
-        st.rerun()
-
 
 def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
     # Streamlit does not provide a native Planner-style drag-and-drop board, so
@@ -1612,6 +1585,8 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
     .label-color-title {{ margin-top: 10px; color: #334155; font-size: 12px; font-weight: 800; }}
     .label-editor-actions {{ display: flex; gap: 8px; margin-top: 10px; }}
     #label-error {{ color: #b91c1c; font-size: 12px; margin-top: 6px; }}
+    .creating-task .task-list-section, .creating-task .activity-panel {{ display: none; }}
+    .creating-task .modal-layout {{ grid-template-columns: minmax(0, 1fr); }}
     .modal-layout {{
         display: grid;
         gap: 18px;
@@ -1996,7 +1971,7 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
                                 <div class="label-editor-actions"><button type="button" id="label-apply">Apply label</button><button type="button" id="label-back">Back</button></div>
                                 <div id="label-error" role="alert"></div>
                             </div>
-                            <p class="modal-note">Click Save changes to save labels and selections. Editing a label updates it across the board.</p>
+                            <p class="modal-note">Labels and selections are saved with the task. Editing a label updates it across the board.</p>
                         </section>
                     </div>
                     <label>Details<textarea id="edit-description"></textarea></label>
@@ -2032,7 +2007,7 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
                         </div>
                         <div id="attachment-error" role="alert"></div>
                         <div id="edit-attachment-links" class="attachment-list"></div>
-                        <div class="modal-note">Save changes to attach added links and files. Local folders: use Copy path if your browser blocks opening. Uploads: 20 MB total per save.</div>
+                        <div class="modal-note">Added links and files are saved with the task. Local folders: use Copy path if your browser blocks opening. Uploads: 20 MB total per save.</div>
                     </div>
                 </div>
                 <section class="task-list-section" aria-label="Task list">
@@ -2068,6 +2043,7 @@ const board = document.getElementById("board");
 const modal = document.getElementById("edit-modal");
 let draggedId = null;
 let editingTaskId = null;
+let newTaskDraft = null;
 let editingResponsibleEmails = [];
 let pendingSaveId = null;
 let pendingColumnRename = null;
@@ -2217,7 +2193,7 @@ function persistTask(task, updates, labelChanges = [], uploadedFiles = []) {{
     document.getElementById("edit-save").textContent = "Saving…";
     board.style.pointerEvents = "none";
     window.parent.postMessage({{
-        type: "planner:save", value: {{event_id: pendingSaveId, task_id: task.id, updates, label_changes: labelChanges, uploaded_files: uploadedFiles}},
+        type: "planner:save", value: {{event_id: pendingSaveId, action: newTaskDraft ? "create_task" : "edit_task", task_id: task.id, updates, label_changes: labelChanges, uploaded_files: uploadedFiles}},
     }}, "*");
 }}
 
@@ -2243,7 +2219,7 @@ window.addEventListener("message", event => {{
         return;
     }}
     document.getElementById("edit-save").disabled = false;
-    document.getElementById("edit-save").textContent = "Save changes";
+    document.getElementById("edit-save").textContent = newTaskDraft ? "Add task" : "Save changes";
     if (result.ok) {{
         closeEditModal();
     }} else {{
@@ -2446,11 +2422,7 @@ function createAddTaskButton(status, inHeader = false) {{
     button.setAttribute("aria-label", `Add task to ${{status}}`);
     button.addEventListener("click", () => {{
         if (pendingSaveId) return;
-        const eventId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
-        window.parent.postMessage({{
-            type: "planner:add-task",
-            value: {{action: "add_task", status, event_id: eventId}},
-        }}, "*");
+        openNewTask(status);
     }});
     return button;
 }}
@@ -3029,6 +3001,7 @@ function updateCardFromTask(card, task) {{
     card.dataset.status = task.status;
     card.querySelector(".task-title").textContent = text(task.title);
     card.querySelector(".project").textContent = text(task.project);
+    card.querySelector(".task-project-line").hidden = !task.project;
     const dueHistory = card.querySelector(".due-history");
     if (dueHistory) {{
         dueHistory.innerHTML = "";
@@ -3068,7 +3041,7 @@ function createTaskCard(task) {{
             </div>
         </details>
         <div class="task-summary">
-            <strong>Project:</strong> <span class="project"></span><br>
+            <div class="task-project-line"><strong>Project:</strong> <span class="project"></span></div>
             <strong>Due:</strong> <span class="due-stack"><span class="due-history"></span><span class="due-current"></span></span>
         </div>
         <div class="task-assignees" role="group" aria-label="Responsible people"></div>
@@ -3113,10 +3086,21 @@ function createDropzone(status) {{
     return zone;
 }}
 
-function openEditModal(taskId) {{
-    const task = findTask(taskId);
+function openNewTask(status) {{
+    if (pendingSaveId) return;
+    const today = new Date();
+    const due = `${{today.getFullYear()}}-${{String(today.getMonth() + 1).padStart(2, "0")}}-${{String(today.getDate()).padStart(2, "0")}}`;
+    openEditModal(null, {{id: null, title: "", status, due, description: "", responsible_emails: data.users.slice(0, 1), labels: [], attachments: [], attachment_links: []}});
+}}
+
+function openEditModal(taskId, draft = null) {{
+    const task = draft || findTask(taskId);
     if (!task) return;
+    newTaskDraft = draft;
     editingTaskId = taskId;
+    document.getElementById("edit-modal-title").textContent = draft ? "Add task" : "Edit task";
+    document.getElementById("edit-save").textContent = draft ? "Add task" : "Save changes";
+    modal.classList.toggle("creating-task", Boolean(draft));
     editingLabelIds = [...(task.labels || [])];
     editingLabelCatalog = (data.labels || []).map(label => ({{...label}}));
     editingLabelChanges = {{}};
@@ -3143,8 +3127,10 @@ function openEditModal(taskId) {{
     document.getElementById("edit-uploaded-files").value = "";
     document.getElementById("checklist-new-item").value = "";
     document.getElementById("comment-input").value = "";
-    renderChecklist(task);
-    renderActivity(task);
+    if (!draft) {{
+        renderChecklist(task);
+        renderActivity(task);
+    }}
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
 }}
@@ -3152,13 +3138,14 @@ function openEditModal(taskId) {{
 function closeEditModal() {{
     attachmentSession += 1;
     editingTaskId = null;
+    newTaskDraft = null;
     setLabelsOpen(false);
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
 }}
 
 function saveEditedTask() {{
-    const task = findTask(editingTaskId);
+    const task = newTaskDraft || findTask(editingTaskId);
     if (!task || pendingSaveId || attachmentReadPending) return;
     if (document.getElementById("attachment-link-input").value.trim() && !addAttachmentLink()) return;
     if (!selectedResponsibleEmails().length) {{
@@ -3166,13 +3153,18 @@ function saveEditedTask() {{
         return;
     }}
 
-    task.title = document.getElementById("edit-title").value.trim() || task.title;
+    const title = document.getElementById("edit-title").value.trim();
+    if (!title) {{
+        document.getElementById("edit-save-error").textContent = "Task title is required.";
+        return;
+    }}
+    task.title = title;
     task.responsible_emails = selectedResponsibleEmails();
     task.responsible_email = task.responsible_emails.join(", ");
     task.status = document.getElementById("edit-status").value;
     const previousDue = text(task.due);
     const nextDue = document.getElementById("edit-due").value || task.due;
-    if (nextDue !== previousDue) {{
+    if (!newTaskDraft && nextDue !== previousDue) {{
         const meta = taskMeta(task);
         meta.due_history.unshift(previousDue);
         meta.due_history = Array.from(new Set(meta.due_history.filter(Boolean))).slice(0, 5);
@@ -3183,7 +3175,7 @@ function saveEditedTask() {{
         task.due = nextDue;
     }}
     task.description = document.getElementById("edit-description").value.trim() || "No additional details provided.";
-    addActivity(task, "updated this task");
+    if (!newTaskDraft) addActivity(task, "updated this task");
 
     const card = document.getElementById(task.id);
     if (card) {{
@@ -3294,6 +3286,13 @@ if not TASK_DATABASE_CSV.exists():
     save_tasks_to_csv()
 
 render_app_header()
+if st.session_state.pop("show_task_created_notice", False):
+    st.success(f"Added task: {st.session_state.last_added_task['title']}")
+    notification = st.session_state.get("last_notification_result", {})
+    if notification.get("status") == "sent":
+        st.success(notification["message"])
+    elif notification:
+        st.warning(notification["message"])
 
 statuses = st.session_state.statuses
 project_ids = st.session_state.project_ids
@@ -3339,16 +3338,6 @@ todo_tasks = [
 ]
 
 
-new_task_request = st.session_state.pop("new_task_request", None)
-if new_task_request:
-    add_task_dialog(
-        project_ids, statuses, users,
-        initial_status=new_task_request["status"],
-        form_key=f"add_task_{new_task_request['event_id']}",
-    )
-if st.session_state.pop("show_added_task_dialog", False):
-    task_added_dialog()
-
 visible_statuses = [status for status in statuses if status in selected_statuses]
 board_html = build_board_html(visible_statuses, filtered_tasks)
 kanban_component = components.declare_component(
@@ -3360,7 +3349,7 @@ kanban_component(
     key="kanban_board", default=None, on_change=on_board_change,
 )
 
-project_count = len({task["project_id"] for task in filtered_tasks})
+project_count = len({task["project_id"] for task in filtered_tasks if task.get("project_id")})
 st.markdown(
     f"""
     <div class="dashboard-strip">

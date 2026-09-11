@@ -41,7 +41,7 @@ class TaskPersistenceTests(unittest.TestCase):
         tree = ast.parse(source.read_text(encoding='utf-8-sig'))
         functions = {
             'save_uploaded_files', 'cleanup_uploaded_files', 'safe_storage_name', 'unique_file_path',
-            'clean_attachment_link', 'local_folder_uri', 'upload_payload', 'attachment_link_items', 'add_task',
+            'clean_attachment_link', 'local_folder_uri', 'upload_payload', 'attachment_link_items', 'add_task', 'apply_new_task',
             'merge_board_labels', 'load_board_labels', 'write_board_labels',
             'csv_json_list', 'task_from_csv_row', 'task_to_csv_row',
             'responsible_emails_list', 'load_tasks_from_csv',
@@ -436,6 +436,55 @@ class TaskPersistenceTests(unittest.TestCase):
         self.assertEqual(self.namespace['load_tasks_from_csv']()[-1]['email_notification_status'], 'failed')
         self.assertFalse(self.namespace['load_tasks_from_csv']()[-1]['email_notification'])
         self.assertEqual(self.state.last_notification_result['status'], 'failed')
+
+    def new_task_event(self, **updates):
+        return dict(event_id='create-event', action='create_task', updates=dict(
+            title='New shared-form task', responsible_emails=['new@example.com'],
+            status='In Progress', due='2026-10-01', description='Details', attachments=[], labels=[],
+        ) | updates)
+
+    def test_shared_form_creates_without_project_fields_with_labels_and_file(self):
+        event = self.new_task_event(labels=['review'], attachments=['https://example.com/file'])
+        event['label_changes'] = [dict(id='review', name='Review', color='#4bce97')]
+        event['uploaded_files'] = [dict(name='review.txt', data=base64.b64encode(b'Review file').decode())]
+        self.namespace['apply_new_task'](event)
+        self.assertTrue(self.state.board_save_result['ok'])
+        task = self.namespace['load_tasks_from_csv']()[-1]
+        self.assertEqual(task['project_id'], '')
+        self.assertEqual(task['project'], '')
+        self.assertEqual(task['status'], 'In Progress')
+        self.assertEqual(task['labels'], ['review'])
+        self.assertEqual(task['email_notification_status'], 'sent')
+        self.assertEqual((Path(self.directory.name) / task['attachments'][1]).read_bytes(), b'Review file')
+        self.assertTrue(self.state.show_task_created_notice)
+        self.namespace['apply_new_task'](event)
+        self.assertEqual(len(self.namespace['load_tasks_from_csv']()), 2)
+        self.edit({'title': 'Edited shared-form task'}, task_id=task['id'])
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['load_tasks_from_csv']()[-1]['title'], 'Edited shared-form task')
+
+    def test_invalid_shared_form_create_never_sends_email_or_writes_ticket(self):
+        original = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        cases = [dict(title=''), dict(responsible_emails=[]), dict(status='Missing'), dict(labels=['missing']), dict(due='invalid'), dict(project_id='PRJ-002')]
+        for index, updates in enumerate(cases):
+            with self.subTest(index=index), patch.dict(self.namespace, send_new_task_notification=lambda task: self.fail('Unexpected email')):
+                self.namespace['apply_new_task'](self.new_task_event(**updates) | {'event_id': f'invalid-{index}'})
+                self.assertFalse(self.state.board_save_result['ok'])
+                self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original)
+
+    def test_failed_creation_rolls_back_labels_uploads_and_skips_email(self):
+        original = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        event = self.new_task_event(labels=['review'])
+        event['label_changes'] = [dict(id='review', name='Review', color='#4bce97')]
+        event['uploaded_files'] = [dict(name='review.txt', data=base64.b64encode(b'Review file').decode())]
+        with patch.dict(self.namespace,
+                        write_tasks_to_csv=lambda tasks: (_ for _ in ()).throw(OSError('Disk full')),
+                        send_new_task_notification=lambda task: self.fail('Unexpected email')):
+            self.namespace['apply_new_task'](event)
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original)
+        self.assertEqual(self.namespace['load_board_labels'](), [])
+        self.assertFalse(any(path.is_file() for path in self.namespace['ATTACHMENTS_DIR'].rglob('*')))
 
     def test_clear_filters_restores_all_categories(self):
         self.state.project_ids = ['PRJ-001']
