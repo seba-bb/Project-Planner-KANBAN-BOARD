@@ -25,7 +25,7 @@ Each task appears as a card. Columns represent task status. Drag a card between 
 | Completed | Tasks that have been finished. |
 | Rejected | Tasks that have been declined or will not be continued. |
 
-Click a column title to rename it directly in the header. Press **Enter** or click outside to save; **Escape** cancels. Empty and duplicate names are rejected. Column names and order are saved in `board_columns.json`, including empty columns, and existing tickets keep their assignments. Drag a column header to change its position; the header lifts and highlights while dragging. Click the shaded **+ Add column** header on the right to create a column in place. Column order is saved alongside column names.
+Click a column title to rename it directly in the header. Press **Enter** or click outside to save; **Escape** cancels. Empty and duplicate names are rejected. Column names and order are saved in `board_columns.json`, including empty columns, and existing tickets keep their assignments. Drag a column header to change its position; the header lifts and highlights while dragging. Click the shaded **+ Add column** header on the right to create a column in place. Column order is saved alongside column names. After adding a column, the board scrolls to the Add column header and opens a fresh name field so you can keep adding columns.
 
 ### Task Ownership
 
@@ -121,3 +121,13 @@ If setting up a new checkout without an existing virtual environment, create one
 - Project reports and notification retry management.
 - Kanban metrics such as work in progress, throughput, and cycle time.
 - ERP, Outlook, and Microsoft Teams integration.
+
+## Tests
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+npm ci --prefix tests/ui
+npm test --prefix tests/ui
+```
+
+The UI regression tests use jsdom and the project VENV to render an isolated board. They cover repeated column creation, iframe refreshes, and failed-save retries without opening or modifying the live CSV.

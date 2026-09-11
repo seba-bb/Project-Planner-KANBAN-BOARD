@@ -1,0 +1,6 @@
+{
+  "name": "planner-ui-tests",
+  "private": true,
+  "scripts": {"test": "../../.venv/bin/python render_board.py | node column_creator.test.js"},
+  "devDependencies": {"jsdom": "29.1.1"}
+}

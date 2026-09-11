@@ -2198,7 +2198,14 @@ function persistTask(task, updates, labelChanges = [], uploadedFiles = []) {{
 }}
 
 window.addEventListener("message", event => {{
-    if (event.source !== window.parent || event.data?.type !== "planner:save-result") return;
+    if (event.source !== window.parent) return;
+    if (event.data?.type === "planner:reveal-column-creator") {{
+        const wrap = document.querySelector(".board-wrap");
+        wrap.scrollLeft = wrap.scrollWidth;
+        document.querySelector(".add-column-button").click();
+        return;
+    }}
+    if (event.data?.type !== "planner:save-result") return;
     const result = event.data.result;
     if (!result || result.event_id !== pendingSaveId) return;
     pendingSaveId = null;
@@ -2209,8 +2216,11 @@ window.addEventListener("message", event => {{
         pendingColumnAdd = null;
         editor.input.disabled = false;
         if (result.ok) {{
-            editor.input.hidden = true;
-            editor.title.hidden = false;
+            if (editor.close) editor.close();
+            else {{
+                editor.input.hidden = true;
+                editor.title.hidden = false;
+            }}
         }} else {{
             editor.error.textContent = result.error;
             editor.input.setAttribute("aria-invalid", "true");
@@ -2541,6 +2551,7 @@ function createAddColumnHeader() {{
     title.className = "add-column-button";
     title.textContent = "+ Add column";
     const form = document.createElement("div");
+    form.className = "add-column-form";
     form.hidden = true;
     const input = document.createElement("input");
     input.className = "column-title-input";
@@ -2562,6 +2573,8 @@ function createAddColumnHeader() {{
         if (pendingSaveId) return;
         form.hidden = true;
         title.hidden = false;
+        input.hidden = false;
+        input.disabled = false;
         error.textContent = "";
         input.value = "";
     }}
@@ -2573,7 +2586,7 @@ function createAddColumnHeader() {{
             return;
         }}
         pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
-        pendingColumnAdd = {{input, title, error}};
+        pendingColumnAdd = {{input, title, error, close}};
         input.disabled = true;
         board.style.pointerEvents = "none";
         window.parent.postMessage({{
@@ -2585,6 +2598,7 @@ function createAddColumnHeader() {{
         if (pendingSaveId) return;
         title.hidden = true;
         form.hidden = false;
+        input.hidden = false;
         input.focus();
     }});
     save.addEventListener("click", submit);
