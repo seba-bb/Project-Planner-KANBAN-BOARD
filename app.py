@@ -254,7 +254,7 @@ def render_app_header() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("Dashboard board view grouped by responsible people")
+    st.caption("Kanban board grouped by task status")
 st.set_page_config(
     page_title="Project Planner",
     page_icon=str(APP_ICON_PATH),
@@ -853,36 +853,15 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
     }}
     .board {{
         display: grid;
-        grid-template-columns: 190px repeat(var(--column-count), minmax(215px, 1fr));
+        grid-template-columns: repeat(var(--column-count), minmax(215px, 1fr));
+        grid-template-rows: auto 1fr;
         gap: 10px;
-        min-width: calc(190px + var(--column-count) * 215px);
+        min-width: calc(var(--column-count) * 225px - 10px);
     }}
-    .header, .person {{
-        position: sticky;
-        left: 0;
-        z-index: 4;
-        background: #ffffff;
-    }}
-    .header, .column-header {{
+    .column-header {{
         position: sticky;
         top: 0;
         z-index: 5;
-    }}
-    .header {{
-        align-items: center;
-        background: #f8fafc;
-        border: 1px solid #dbe3ef;
-        border-radius: 8px;
-        color: #334155;
-        display: flex;
-        font-size: 11px;
-        font-weight: 900;
-        letter-spacing: 0;
-        min-height: 42px;
-        padding: 10px;
-        text-transform: uppercase;
-    }}
-    .column-header {{
         align-items: center;
         background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
         border: 1px solid #dbe3ef;
@@ -923,17 +902,6 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         justify-content: center;
         min-width: 24px;
         padding: 0 7px;
-    }}
-    .person {{
-        align-items: start;
-        border-bottom: 1px solid #dbe3ef;
-        color: #111827;
-        display: flex;
-        font-size: 14px;
-        font-weight: 800;
-        min-height: 36px;
-        padding: 10px 8px 7px;
-        text-transform: none;
     }}
     .dropzone {{
         background: #f8fafc;
@@ -999,6 +967,27 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         color: #475569;
         font-size: 12px;
         line-height: 1.45;
+    }}
+    .task-assignees {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 8px;
+    }}
+    .assignee-avatar {{
+        align-items: center;
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 50%;
+        color: #1d4ed8;
+        display: inline-flex;
+        flex: 0 0 26px;
+        font-size: 10px;
+        font-weight: 800;
+        height: 26px;
+        justify-content: center;
+        box-sizing: border-box;
+        width: 26px;
     }}
     .due-stack {{
         align-items: center;
@@ -1423,7 +1412,7 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
 </style>
 </head>
 <body>
-<p class="hint">Hold a task card and drop it into another column or another responsible row. Double-click a task to edit it in a small window.</p>
+<p class="hint">Hold a task card and drop it into another status column. Assignee initials appear below the due date. Double-click a task to edit it in a small window.</p>
 <div class="board-wrap">
     <div id="board" class="board"></div>
 </div>
@@ -1638,12 +1627,33 @@ function responsibleEmailsText(task) {{
     return taskResponsibleEmails(task).join(", ");
 }}
 
-function addCell(tag, className, content) {{
-    const cell = document.createElement(tag);
-    cell.className = className;
-    cell.textContent = content;
-    board.appendChild(cell);
-    return cell;
+function assigneeInitials(email) {{
+    const name = text(email).split("@")[0].trim();
+    const parts = name.split(/[\\s._+-]+/u).filter(Boolean);
+    if (!parts.length) return "?";
+    return (parts.length > 1
+        ? Array.from(parts[0])[0] + Array.from(parts[parts.length - 1])[0]
+        : Array.from(parts[0]).slice(0, 2).join("")).toUpperCase();
+}}
+
+function renderAssignees(container, task) {{
+    container.replaceChildren();
+    const emails = [...new Set(taskResponsibleEmails(task).map(email => text(email).trim()).filter(Boolean))];
+    emails.forEach(email => {{
+        const avatar = document.createElement("span");
+        avatar.className = "assignee-avatar";
+        avatar.textContent = assigneeInitials(email);
+        avatar.title = email;
+        avatar.setAttribute("role", "img");
+        avatar.setAttribute("aria-label", email);
+        container.appendChild(avatar);
+    }});
+}}
+
+function updateColumnCounts() {{
+    board.querySelectorAll(".column-header").forEach(header => {{
+        header.querySelector(".column-count").textContent = data.tasks.filter(task => task.status === header.dataset.status).length;
+    }});
 }}
 
 function statusAccent(status) {{
@@ -1659,6 +1669,7 @@ function createColumnHeader(status) {{
     const header = document.createElement("div");
     const taskCount = data.tasks.filter(task => task.status === status).length;
     header.className = "column-header";
+    header.dataset.status = status;
     header.style.setProperty("--status-accent", statusAccent(status));
 
     const title = document.createElement("span");
@@ -1855,6 +1866,7 @@ function updateCardFromTask(card, task) {{
         }});
     }}
     card.querySelector(".due-current").textContent = text(task.due);
+    renderAssignees(card.querySelector(".task-assignees"), task);
     const projectBadge = card.querySelector(".task-project-id-badge");
     if (projectBadge) {{
         projectBadge.textContent = text(task.project_id);
@@ -1884,6 +1896,7 @@ function createTaskCard(task) {{
             <strong>Project:</strong> <span class="project"></span><br>
             <strong>Due:</strong> <span class="due-stack"><span class="due-history"></span><span class="due-current"></span></span>
         </div>
+        <div class="task-assignees" role="group" aria-label="Responsible people"></div>
         <details>
             <summary>Details</summary>
             <div class="task-details">
@@ -1908,10 +1921,9 @@ function createTaskCard(task) {{
     return card;
 }}
 
-function createDropzone(person, status) {{
+function createDropzone(status) {{
     const zone = document.createElement("div");
     zone.className = "dropzone";
-    zone.dataset.owner = person;
     zone.dataset.status = status;
 
     zone.addEventListener("dragover", event => {{
@@ -1927,18 +1939,11 @@ function createDropzone(person, status) {{
         if (!card) return;
 
         const task = findTask(cardId);
-        if (task) {{
-            task.owner = person;
-            task.status = status;
-            updateCardFromTask(card, task);
-        }} else {{
-            card.dataset.owner = person;
-            card.dataset.status = status;
-            card.className = cardClass(status);
-            card.querySelector(".owner").textContent = person;
-            card.querySelector(".status").textContent = status;
-        }}
+        if (!task) return;
+        task.status = status;
+        updateCardFromTask(card, task);
         zone.appendChild(card);
+        updateColumnCounts();
     }});
 
     return zone;
@@ -2012,10 +2017,11 @@ function saveEditedTask() {{
 
     const card = document.getElementById(task.id);
     if (card) {{
-        const targetZone = document.querySelector(`.dropzone[data-owner="${{CSS.escape(task.owner)}}"][data-status="${{CSS.escape(task.status)}}"]`);
+        const targetZone = document.querySelector(`.dropzone[data-status="${{CSS.escape(task.status)}}"]`);
         updateCardFromTask(card, task);
         if (targetZone) targetZone.appendChild(card);
     }}
+    updateColumnCounts();
     closeEditModal();
 }}
 
@@ -2078,19 +2084,19 @@ document.addEventListener("keydown", event => {{
 }});
 
 function renderBoard() {{
+    board.replaceChildren();
+    if (!data.statuses.length) {{
+        board.textContent = "Select a status column to display the board.";
+        return;
+    }}
     board.style.setProperty("--column-count", data.statuses.length);
-    addCell("div", "header", "Responsible");
     data.statuses.forEach(status => createColumnHeader(status));
-
-    data.people.forEach(person => {{
-        addCell("div", "person", person);
-        data.statuses.forEach(status => {{
-            const zone = createDropzone(person, status);
-            data.tasks
-                .filter(task => task.owner === person && task.status === status)
-                .forEach(task => zone.appendChild(createTaskCard(task)));
-            board.appendChild(zone);
-        }});
+    data.statuses.forEach(status => {{
+        const zone = createDropzone(status);
+        data.tasks
+            .filter(task => task.status === status)
+            .forEach(task => zone.appendChild(createTaskCard(task)));
+        board.appendChild(zone);
     }});
 }}
 
@@ -2340,7 +2346,7 @@ st.markdown(
 
 st.subheader("Shared Project Board")
 st.caption(
-    "Task cards show title, project, and due date. Open Details for the rest. Drag cards between columns and responsible rows."
+    "Task cards show title, project, due date, and assignee initials. Drag cards between status columns. Open Details or double-click a card to edit assignments."
 )
 
 board_action_cols = st.columns([1, 1, 1, 3])
