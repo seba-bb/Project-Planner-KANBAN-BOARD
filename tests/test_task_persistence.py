@@ -4,6 +4,7 @@ import copy
 import csv
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -23,7 +24,7 @@ class TaskPersistenceTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.state = State()
         self.namespace = dict(
-            csv=csv, json=json, os=os, tempfile=tempfile, Path=Path, uuid4=uuid4,
+            csv=csv, json=json, os=os, re=re, tempfile=tempfile, Path=Path, uuid4=uuid4,
             st=SimpleNamespace(session_state=self.state),
             TASK_DATABASE_CSV=Path(self.directory.name) / 'tasks.csv',
         )
@@ -33,6 +34,7 @@ class TaskPersistenceTests(unittest.TestCase):
             'csv_json_list', 'task_from_csv_row', 'task_to_csv_row',
             'responsible_emails_list', 'load_tasks_from_csv',
             'write_tasks_to_csv', 'save_tasks_to_csv', 'apply_board_edit',
+            'normalize_email', 'clean_responsible_emails',
         }
         constants = {'TASK_CSV_FIELDS', 'DEFAULT_STATUSES', 'DEFAULT_PEOPLE', 'DEFAULT_PROJECT_IDS'}
         nodes = [node for node in tree.body if
@@ -76,6 +78,11 @@ class TaskPersistenceTests(unittest.TestCase):
         self.assertEqual(saved[0]['responsible_emails'], ['first@example.com'])
         self.assertEqual(saved[1]['responsible_emails'], ['new@example.com'])
 
+    def test_new_email_is_normalized_and_not_duplicated(self):
+        self.edit({'responsible_emails': [' Anna.Nowak@example.com ', 'anna.nowak@example.com']})
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.assertEqual(self.load()[0]['responsible_emails'], ['anna.nowak@example.com'])
+
     def test_legacy_csv_gets_persistent_ids(self):
         path = self.namespace['TASK_DATABASE_CSV']
         with path.open(newline='', encoding='utf-8-sig') as stream:
@@ -93,7 +100,7 @@ class TaskPersistenceTests(unittest.TestCase):
 
     def test_invalid_edits_do_not_change_saved_or_session_tasks(self):
         original = copy.deepcopy(self.state.tasks)
-        for updates in ({'responsible_emails': []}, {'responsible_emails': 'bad'}, {'id': 'changed'}):
+        for updates in ({'responsible_emails': []}, {'responsible_emails': 'bad'}, {'responsible_emails': ['invalid-email']}, {'id': 'changed'}):
             self.edit(updates)
             self.assertFalse(self.state.board_save_result['ok'])
             self.assertEqual(self.state.tasks, original)

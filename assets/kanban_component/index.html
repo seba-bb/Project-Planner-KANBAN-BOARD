@@ -21,7 +21,7 @@ function acknowledge() {
 
 frame.addEventListener("load", acknowledge);
 window.addEventListener("message", event => {
-  if (event.source === frame.contentWindow && event.data?.type === "planner:save") {
+  if (event.source === frame.contentWindow && ["planner:save", "planner:add-task"].includes(event.data?.type)) {
     send("streamlit:setComponentValue", {value: event.data.value, dataType: "json"});
   } else if (event.source === window.parent && event.data?.type === "streamlit:render") {
     const args = event.data.args;

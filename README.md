@@ -43,7 +43,7 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 
 ### Using the Board
 
-1. Add a task with its project, owner, due date, and initial status.
+1. Click **+** in a column header or **+ Add task** at the bottom of a column. Fill in the project, owner, and due date; the column status is selected automatically.
 2. Place planned work in Backlog / To Do.
 3. Move a card to In Progress when work starts.
 4. Update task details and attach supporting documents as needed.
@@ -56,10 +56,10 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 - Task creation and editing.
 - Configurable status columns and owner roles.
 - Multiple project IDs with customizable colors.
-- Assignment of multiple responsible people to a task.
+- Assignment of multiple responsible people to a task, with new email addresses added directly in the responsible-person selector.
 - Task attachments and document links.
 - Filters for project, owner role, and status.
-- Dashboard counts for visible tasks, projects, Quality To Do tasks, and columns.
+- Statistics below the board for visible tasks, projects, Quality To Do tasks, and columns.
 - Local CSV task storage and actions CSV download.
 
 ## Technology and Storage

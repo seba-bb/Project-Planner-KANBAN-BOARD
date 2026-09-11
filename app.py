@@ -5,6 +5,7 @@ import csv
 import json
 import mimetypes
 import os
+import re
 import tempfile
 from uuid import uuid4
 from pathlib import Path
@@ -283,9 +284,7 @@ def apply_board_edit(event: object) -> None:
         task.update(updates)
         if not task["title"].strip() or not task["project"].strip():
             raise ValueError("Task title and project name are required.")
-        if not task["responsible_emails"] or any(not email.strip() for email in task["responsible_emails"]):
-            raise ValueError("Select at least one responsible person.")
-        task["responsible_emails"] = list(dict.fromkeys(task["responsible_emails"]))
+        task["responsible_emails"] = clean_responsible_emails(task["responsible_emails"])
         task["responsible_email"] = ", ".join(task["responsible_emails"])
         write_tasks_to_csv(tasks)
         st.session_state.tasks = tasks
@@ -298,7 +297,12 @@ def apply_board_edit(event: object) -> None:
 
 
 def on_board_change() -> None:
-    apply_board_edit(st.session_state.get("kanban_board"))
+    event = st.session_state.get("kanban_board")
+    if isinstance(event, dict) and event.get("action") == "add_task":
+        if event.get("status") in st.session_state.statuses:
+            st.session_state.new_task_request = event
+        return
+    apply_board_edit(event)
 
 
 def task_database_csv_bytes() -> bytes:
@@ -326,7 +330,6 @@ def render_app_header() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("Kanban board grouped by task status")
 st.set_page_config(
     page_title="Project Planner",
     page_icon=str(APP_ICON_PATH),
@@ -598,6 +601,16 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def clean_responsible_emails(emails: list[str]) -> list[str]:
+    cleaned = list(dict.fromkeys(normalize_email(email) for email in emails))
+    if not cleaned:
+        raise ValueError("Select at least one responsible person.")
+    for email in cleaned:
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise ValueError(f"Invalid email address: {email}.")
+    return cleaned
+
+
 def add_user_emails(raw_emails: str) -> tuple[bool, str]:
     candidates = [normalize_email(email) for email in raw_emails.replace(",", "\n").splitlines()]
     candidates = [email for email in candidates if email]
@@ -719,8 +732,10 @@ def add_task(
     if not cleaned_project:
         return False, "Project name is required."
 
-    if not responsible_emails:
-        return False, "Select at least one responsible person."
+    try:
+        responsible_emails = clean_responsible_emails(responsible_emails)
+    except ValueError as error:
+        return False, str(error)
 
     task = {
         "id": uuid4().hex,
@@ -743,14 +758,24 @@ def add_task(
 
 
 @st.dialog("Add task")
-def add_task_dialog(project_ids: list[str], people: list[str], statuses: list[str], users: list[str]) -> None:
-    with st.form("add_task_dialog_form"):
+def add_task_dialog(
+    project_ids: list[str], people: list[str], statuses: list[str], users: list[str],
+    initial_status: str | None = None, form_key: str = "add_task_dialog_form",
+) -> None:
+    with st.form(form_key):
         task_title = st.text_input("Task title", placeholder="Prepare inspection report")
         task_project_id = st.selectbox("Project ID", project_ids)
         task_project = st.text_input("Project name", placeholder="NPI - Stamping Bracket")
         task_owner = st.selectbox("Responsible row", people)
-        responsible_emails = st.multiselect("Responsible people", users, default=users[:1])
-        task_status = st.selectbox("Column/status", statuses)
+        responsible_emails = st.multiselect(
+            "Responsible people", users, default=users[:1], accept_new_options=True,
+            placeholder="Select people or enter a new email",
+            help="Type a new email address and press Enter to add it to this task.",
+        )
+        task_status = st.selectbox(
+            "Column/status", statuses,
+            index=statuses.index(initial_status) if initial_status in statuses else 0,
+        )
         task_due = st.date_input("Due date")
         task_description = st.text_area("Details", placeholder="Additional task information")
         uploaded_files = st.file_uploader("Attach files", accept_multiple_files=True)
@@ -944,7 +969,7 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         color: #0f172a;
         display: grid;
         gap: 6px;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: 1fr auto auto;
         min-height: 42px;
         overflow: hidden;
         padding: 9px 10px 8px;
@@ -977,7 +1002,44 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         min-width: 24px;
         padding: 0 7px;
     }}
+    .header-add-task, .column-add-task {{
+        align-items: center;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: #2563eb;
+        cursor: pointer;
+        display: inline-flex;
+        font-family: inherit;
+        font-weight: 700;
+        justify-content: center;
+    }}
+    .header-add-task {{
+        font-size: 23px;
+        height: 30px;
+        line-height: 1;
+        width: 30px;
+    }}
+    .column-add-task {{
+        flex-shrink: 0;
+        font-size: 12px;
+        gap: 6px;
+        margin-top: auto;
+        min-height: 38px;
+        padding: 8px;
+        width: 100%;
+    }}
+    .header-add-task:hover, .column-add-task:hover {{
+        background: #eff6ff;
+        border-color: #bfdbfe;
+    }}
+    .header-add-task:focus-visible, .column-add-task:focus-visible {{
+        outline: 2px solid #2563eb;
+        outline-offset: 2px;
+    }}
     .dropzone {{
+        display: flex;
+        flex-direction: column;
         background: #f8fafc;
         border: 1px dashed #cbd5e1;
         border-radius: 8px;
@@ -990,6 +1052,7 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         border-color: #2563eb;
     }}
     .task-card {{
+        flex-shrink: 0;
         background: #ffffff;
         border: 1px solid #dbe3ef;
         border-left: 4px solid #2563eb;
@@ -1291,6 +1354,34 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         display: grid;
         gap: 4px;
     }}
+    .responsible-add {{
+        background: #ffffff;
+        border-top: 1px solid #e2e8f0;
+        bottom: -6px;
+        display: flex;
+        gap: 6px;
+        padding: 8px 0 4px;
+        position: sticky;
+    }}
+    .responsible-add input {{
+        margin: 0;
+        min-width: 0;
+        flex: 1;
+    }}
+    .responsible-add button {{
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 6px;
+        color: #1d4ed8;
+        cursor: pointer;
+        font: inherit;
+        padding: 6px 10px;
+        white-space: nowrap;
+    }}
+    #responsible-email-error {{
+        color: #b91c1c;
+        font-size: 12px;
+    }}
     .responsible-option {{
         align-items: center;
         border-radius: 5px;
@@ -1508,7 +1599,14 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
                                 <button type="button" id="responsible-clear" class="responsible-clear" title="Clear selected people">x</button>
                                 <span class="responsible-caret">v</span>
                             </div>
-                            <div id="responsible-menu" class="responsible-menu"></div>
+                            <div id="responsible-menu" class="responsible-menu">
+                                <div id="responsible-options"></div>
+                                <div class="responsible-add">
+                                    <input id="responsible-new-email" type="email" aria-label="New responsible email" placeholder="name@company.com">
+                                    <button id="responsible-add-email" type="button">Add email</button>
+                                </div>
+                                <div id="responsible-email-error" role="alert"></div>
+                            </div>
                         </div>
                     </div>
                     <label>Column/status<select id="edit-status"></select></label>
@@ -1659,7 +1757,7 @@ function setResponsibleMenuOpen(isOpen) {{
 
 function syncResponsiblePicker() {{
     const tags = document.getElementById("responsible-tags");
-    const menu = document.getElementById("responsible-menu");
+    const menu = document.getElementById("responsible-options");
     tags.innerHTML = "";
     menu.innerHTML = "";
 
@@ -1712,7 +1810,34 @@ function syncResponsiblePicker() {{
     }});
 }}
 
+function addResponsibleEmail() {{
+    const input = document.getElementById("responsible-new-email");
+    const email = input.value.trim().toLowerCase();
+    const error = document.getElementById("responsible-email-error");
+    if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/u.test(email)) {{
+        error.textContent = "Enter a valid email address, for example name@company.com.";
+        input.focus();
+        return;
+    }}
+    error.textContent = "";
+    data.users = uniqueValues([...data.users, email]);
+    editingResponsibleEmails = uniqueValues([...editingResponsibleEmails, email]);
+    input.value = "";
+    syncResponsiblePicker();
+    input.focus();
+}}
+
+document.getElementById("responsible-add-email").addEventListener("click", addResponsibleEmail);
+document.getElementById("responsible-new-email").addEventListener("keydown", event => {{
+    if (event.key === "Enter") {{
+        event.preventDefault();
+        addResponsibleEmail();
+    }}
+}});
+
 function renderResponsiblePicker(selectedValues) {{
+    document.getElementById("responsible-new-email").value = "";
+    document.getElementById("responsible-email-error").textContent = "";
     const selected = Array.isArray(selectedValues) ? selectedValues : [selectedValues];
     editingResponsibleEmails = uniqueValues(selected);
     syncResponsiblePicker();
@@ -1771,6 +1896,24 @@ function statusAccent(status) {{
     return "#64748b";
 }}
 
+function createAddTaskButton(status, inHeader = false) {{
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = inHeader ? "header-add-task" : "column-add-task";
+    button.textContent = inHeader ? "+" : "+ Add task";
+    button.title = `Add task to ${{status}}`;
+    button.setAttribute("aria-label", `Add task to ${{status}}`);
+    button.addEventListener("click", () => {{
+        if (pendingSaveId) return;
+        const eventId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
+        window.parent.postMessage({{
+            type: "planner:add-task",
+            value: {{action: "add_task", status, event_id: eventId}},
+        }}, "*");
+    }});
+    return button;
+}}
+
 function createColumnHeader(status) {{
     const header = document.createElement("div");
     const taskCount = data.tasks.filter(task => task.status === status).length;
@@ -1788,6 +1931,7 @@ function createColumnHeader(status) {{
 
     header.appendChild(title);
     header.appendChild(count);
+    header.appendChild(createAddTaskButton(status, true));
     board.appendChild(header);
     return header;
 }}
@@ -2130,7 +2274,7 @@ function saveEditedTask() {{
     if (card) {{
         const targetZone = document.querySelector(`.dropzone[data-status="${{CSS.escape(task.status)}}"]`);
         updateCardFromTask(card, task);
-        if (targetZone) targetZone.appendChild(card);
+        if (targetZone) targetZone.insertBefore(card, targetZone.querySelector(".column-add-task"));
     }}
     updateColumnCounts();
     const fields = ["title", "project_id", "project", "owner", "responsible_emails", "status", "due", "description", "attachments"];
@@ -2208,6 +2352,7 @@ function renderBoard() {{
         data.tasks
             .filter(task => task.status === status)
             .forEach(task => zone.appendChild(createTaskCard(task)));
+        zone.appendChild(createAddTaskButton(status));
         board.appendChild(zone);
     }});
 }}
@@ -2429,6 +2574,32 @@ quality_todo_tasks = [
     if task["owner"] == "Quality Engineer" and task["status"] == "Backlog / To Do"
 ]
 
+
+new_task_request = st.session_state.pop("new_task_request", None)
+if new_task_request:
+    add_task_dialog(
+        project_ids, people, statuses, users,
+        initial_status=new_task_request["status"],
+        form_key=f"add_task_{new_task_request['event_id']}",
+    )
+if st.button("Attach files"):
+    attach_files_dialog()
+
+if st.session_state.pop("show_added_task_dialog", False):
+    task_added_dialog()
+
+visible_statuses = [status for status in statuses if status in selected_statuses]
+visible_people = [person for person in people if person in selected_people]
+board_html = build_board_html(visible_statuses, visible_people, filtered_tasks)
+kanban_component = components.declare_component(
+    "kanban_board", path=str(Path(__file__).parent / "assets" / "kanban_component"),
+)
+kanban_component(
+    html=board_html, height=board_height(len(visible_people)),
+    save_result=st.session_state.get("board_save_result"),
+    key="kanban_board", default=None, on_change=on_board_change,
+)
+
 project_count = len({task["project_id"] for task in filtered_tasks})
 st.markdown(
     f"""
@@ -2453,39 +2624,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-st.subheader("Shared Project Board")
-st.caption(
-    "Task cards show title, project, due date, and assignee initials. Drag cards between status columns. Open Details or double-click a card to edit assignments."
-)
-
-board_action_cols = st.columns([1, 1, 1, 3])
-if board_action_cols[0].button("Add task", type="primary"):
-    add_task_dialog(project_ids, people, statuses, users)
-if board_action_cols[1].button("Attach files"):
-    attach_files_dialog()
-if board_action_cols[2].button("People emails"):
-    manage_people_emails_dialog()
-
-if st.session_state.get("show_added_task_dialog"):
-    task_added_dialog()
-
-visible_statuses = [status for status in statuses if status in selected_statuses]
-visible_people = [person for person in people if person in selected_people]
-board_html = build_board_html(visible_statuses, visible_people, filtered_tasks)
-kanban_component = components.declare_component(
-    "kanban_board", path=str(Path(__file__).parent / "assets" / "kanban_component"),
-)
-kanban_component(
-    html=board_html, height=board_height(len(visible_people)),
-    save_result=st.session_state.get("board_save_result"),
-    key="kanban_board", default=None, on_change=on_board_change,
-)
-
-
-
-
-
-
-
-
