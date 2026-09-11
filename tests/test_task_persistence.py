@@ -41,7 +41,7 @@ class TaskPersistenceTests(unittest.TestCase):
             'apply_column_rename', 'rename_values', 'add_value',
             'move_board_column', 'apply_column_action', 'task_matches_filters', 'reset_board_filters',
         }
-        constants = {'TASK_CSV_FIELDS', 'DEFAULT_STATUSES', 'DEFAULT_PEOPLE', 'DEFAULT_PROJECT_IDS'}
+        constants = {'TASK_CSV_FIELDS', 'DEFAULT_STATUSES', 'DEFAULT_PROJECT_IDS'}
         nodes = [node for node in tree.body if
                  (isinstance(node, ast.FunctionDef) and node.name in functions) or
                  (isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in constants for t in node.targets))]
@@ -239,19 +239,16 @@ class TaskPersistenceTests(unittest.TestCase):
 
     def test_clear_filters_restores_all_categories(self):
         self.state.project_ids = ['PRJ-001']
-        self.state.people = ['Quality Engineer']
         self.state.filter_keyword = 'parts'
         self.state.filter_members = ['first@example.com']
         self.state.filter_due = 'Overdue'
         self.state.filter_projects = []
-        self.state.filter_owners = []
         self.state.status_filter = []
         self.namespace['reset_board_filters']()
         self.assertEqual(self.state.filter_keyword, '')
         self.assertEqual(self.state.filter_members, [])
         self.assertEqual(self.state.filter_due, 'Any date')
         self.assertEqual(self.state.filter_projects, ['PRJ-001'])
-        self.assertEqual(self.state.filter_owners, ['Quality Engineer'])
         self.assertEqual(self.state.status_filter, self.state.statuses)
 
 

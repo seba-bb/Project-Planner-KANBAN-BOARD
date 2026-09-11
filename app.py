@@ -19,14 +19,6 @@ import streamlit.components.v1 as components
 
 
 DEFAULT_STATUSES = ["Backlog / To Do", "In Progress", "Completed", "Rejected"]
-DEFAULT_PEOPLE = [
-    "Project Manager",
-    "Manufacturing Engineer",
-    "Quality Engineer",
-    "Purchasing",
-    "Logistics",
-    "Technical Director",
-]
 DEFAULT_PROJECT_IDS = ["PRJ-001", "PRJ-002", "PRJ-003"]
 DEFAULT_PROJECT_COLORS = [
     "#2563eb",
@@ -177,7 +169,7 @@ def task_from_csv_row(row: dict[str, str]) -> dict[str, object]:
     task = {
         "id": row.get("id") or uuid4().hex,
         "title": row.get("title", "Untitled task"),
-        "owner": row.get("owner", DEFAULT_PEOPLE[0]),
+        "owner": row.get("owner", ""),
         "responsible_emails": responsible_emails,
         "responsible_email": ", ".join(responsible_emails),
         "status": row.get("status", DEFAULT_STATUSES[0]),
@@ -269,7 +261,7 @@ def apply_board_edit(event: object) -> None:
         updates = event.get("updates")
         if not isinstance(updates, dict) or not updates:
             raise ValueError("No ticket changes were received.")
-        allowed = {"title", "project_id", "project", "owner", "responsible_emails", "status", "due", "description", "attachments"}
+        allowed = {"title", "project_id", "project", "responsible_emails", "status", "due", "description", "attachments"}
         if set(updates) - allowed:
             raise ValueError("The ticket contains unsupported changes.")
         for field, value in updates.items():
@@ -411,7 +403,6 @@ def reset_board_filters() -> None:
     st.session_state.filter_members = []
     st.session_state.filter_due = "Any date"
     st.session_state.filter_projects = st.session_state.project_ids.copy()
-    st.session_state.filter_owners = st.session_state.people.copy()
     st.session_state.status_filter = st.session_state.statuses.copy()
 
 
@@ -421,7 +412,7 @@ def task_matches_filters(
 ) -> bool:
     emails = responsible_emails_list(task)
     searchable = " ".join(str(task.get(field, "")) for field in (
-        "title", "description", "project", "project_id", "owner", "status", "due",
+        "title", "description", "project", "project_id", "status", "due",
     )) + " " + " ".join(emails)
     if any(word not in searchable.casefold() for word in keyword.casefold().split()):
         return False
@@ -575,8 +566,6 @@ def initialize_state() -> None:
         st.session_state.statuses = load_board_columns()
     if "updated_status_filter" in st.session_state:
         st.session_state.status_filter = st.session_state.pop("updated_status_filter")
-    if "people" not in st.session_state:
-        st.session_state.people = DEFAULT_PEOPLE.copy()
     if "project_ids" not in st.session_state:
         st.session_state.project_ids = DEFAULT_PROJECT_IDS.copy()
     if "project_colors" not in st.session_state:
@@ -601,8 +590,6 @@ def initialize_state() -> None:
         task.setdefault("email_notification", False)
         if task.get("status") and task["status"] not in st.session_state.statuses:
             st.session_state.statuses.append(task["status"])
-        if task.get("owner") and task["owner"] not in st.session_state.people:
-            st.session_state.people.append(task["owner"])
         if task.get("project_id") and task["project_id"] not in st.session_state.project_ids:
             st.session_state.project_ids.append(task["project_id"])
         for email in task["responsible_emails"]:
@@ -722,7 +709,7 @@ def rename_values(
     if state_key == "statuses":
         return rename_board_columns(new_names)
     # Rename list entries and update existing tasks that reference the old names.
-    # This keeps the board from losing tasks when a column, project ID, or owner row is renamed.
+    # This keeps the board from losing tasks when a column or project ID is renamed.
     cleaned_names = [normalize_name(name) for name in new_names]
 
     if any(not name for name in cleaned_names):
@@ -871,13 +858,12 @@ def add_attachments_to_task(
 
 
 def task_option_label(task: dict[str, object]) -> str:
-    return f"{task['project_id']} | {task['title']} ({task['owner']})"
+    return f"{task['project_id']} | {task['title']}"
 
 def add_task(
     title: str,
     project_id: str,
     project: str,
-    owner: str,
     responsible_emails: list[str],
     status: str,
     due: str,
@@ -905,7 +891,7 @@ def add_task(
     task = {
         "id": uuid4().hex,
         "title": cleaned_title,
-        "owner": owner,
+        "owner": "",  # Retain the legacy CSV field without assigning a role.
         "responsible_emails": responsible_emails,
         "responsible_email": ", ".join(responsible_emails),
         "status": status,
@@ -924,14 +910,13 @@ def add_task(
 
 @st.dialog("Add task")
 def add_task_dialog(
-    project_ids: list[str], people: list[str], statuses: list[str], users: list[str],
+    project_ids: list[str], statuses: list[str], users: list[str],
     initial_status: str | None = None, form_key: str = "add_task_dialog_form",
 ) -> None:
     with st.form(form_key):
         task_title = st.text_input("Task title", placeholder="Prepare inspection report")
         task_project_id = st.selectbox("Project ID", project_ids)
         task_project = st.text_input("Project name", placeholder="NPI - Stamping Bracket")
-        task_owner = st.selectbox("Responsible row", people)
         responsible_emails = st.multiselect(
             "Responsible people", users, default=users[:1], accept_new_options=True,
             placeholder="Select people or enter a new email",
@@ -952,7 +937,6 @@ def add_task_dialog(
             task_title,
             task_project_id,
             task_project,
-            task_owner,
             responsible_emails,
             task_status,
             task_due.isoformat(),
@@ -1042,7 +1026,6 @@ def task_added_dialog() -> None:
         st.markdown(f"**Task title:** {escape(task['title'])}")
         st.markdown(f"**Project ID:** {escape(task['project_id'])}")
         st.markdown(f"**Project name:** {escape(task['project'])}")
-        st.markdown(f"**Responsible row:** {escape(task['owner'])}")
         st.markdown(f"**Responsible:** {escape(responsible_emails_text(task))}")
         st.markdown(f"**Column/status:** {escape(task['status'])}")
         st.markdown(f"**Due date:** {escape(task['due'])}")
@@ -1066,19 +1049,7 @@ def task_added_dialog() -> None:
         st.rerun()
 
 
-def remove_people(people_to_remove: list[str]) -> tuple[bool, str]:
-    if not people_to_remove:
-        return False, "Select at least one row to remove."
-
-    remaining_people = [person for person in st.session_state.people if person not in people_to_remove]
-    if not remaining_people:
-        return False, "At least one responsible row must remain."
-
-    st.session_state.people = remaining_people
-    return True, "Responsible rows removed. Tasks assigned to removed rows are hidden until the row is added again."
-
-
-def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[str, str]]) -> str:
+def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
     # Streamlit does not provide a native Planner-style drag-and-drop board, so
     # this function embeds a small self-contained HTML/CSS/JS app.
     board_tasks = [
@@ -1087,7 +1058,6 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
     ]
     board_data = {
         "statuses": statuses,
-        "people": people,
         "users": st.session_state.users,
         "project_colors": project_color_payload(),
         "tasks": board_tasks,
@@ -1849,7 +1819,6 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
                     <label>Task title<input id="edit-title" type="text"></label>
                     <label>Project ID<input id="edit-project-id" type="text"></label>
                     <label>Project name<input id="edit-project" type="text"></label>
-                    <label>Responsible row<select id="edit-owner"></select></label>
                     <div class="field-label">Responsible people
                         <div class="responsible-multiselect" id="edit-responsible-people">
                             <div id="responsible-control" class="responsible-control" tabindex="0" role="button" aria-expanded="false">
@@ -2608,7 +2577,6 @@ function refreshDueDates() {{
 
 function updateCardFromTask(card, task) {{
     card.className = cardClass(task.status);
-    card.dataset.owner = task.owner;
     card.dataset.status = task.status;
     card.querySelector(".task-title").textContent = text(task.title);
     card.querySelector(".project").textContent = text(task.project);
@@ -2629,7 +2597,6 @@ function updateCardFromTask(card, task) {{
         applyProjectBadgeColor(projectBadge, task.project_id);
     }}
     card.querySelector(".project-id-detail").textContent = text(task.project_id);
-    card.querySelector(".owner").textContent = text(task.owner);
     card.querySelector(".responsible-email").textContent = responsibleEmailsText(task) || "No responsible person selected";
     card.querySelector(".status").textContent = text(task.status);
     card.querySelector(".description").textContent = text(task.description);
@@ -2640,7 +2607,6 @@ function createTaskCard(task) {{
     const card = document.createElement("div");
     card.draggable = true;
     card.id = task.id;
-    card.dataset.owner = task.owner;
     card.dataset.status = task.status;
 
     card.innerHTML = `
@@ -2657,7 +2623,6 @@ function createTaskCard(task) {{
             <summary>Details</summary>
             <div class="task-details">
                 <strong>Project ID:</strong> <span class="project-id-detail"></span><br>
-                <strong>Owner:</strong> <span class="owner"></span><br>
                 <strong>Responsible:</strong> <span class="responsible-email"></span><br>
                 <strong>Status:</strong> <span class="status"></span><br>
                 <strong>Description:</strong> <span class="description"></span><br>
@@ -2714,7 +2679,6 @@ function openEditModal(taskId) {{
     document.getElementById("edit-title").value = text(task.title);
     document.getElementById("edit-project-id").value = text(task.project_id);
     document.getElementById("edit-project").value = text(task.project);
-    fillSelect(document.getElementById("edit-owner"), data.people, task.owner);
     renderResponsiblePicker(taskResponsibleEmails(task));
     fillSelect(document.getElementById("edit-status"), data.statuses, task.status);
     document.getElementById("edit-due").value = text(task.due);
@@ -2747,7 +2711,6 @@ function saveEditedTask() {{
     task.title = document.getElementById("edit-title").value.trim() || task.title;
     task.project_id = document.getElementById("edit-project-id").value.trim() || task.project_id;
     task.project = document.getElementById("edit-project").value.trim() || task.project;
-    task.owner = document.getElementById("edit-owner").value;
     task.responsible_emails = selectedResponsibleEmails();
     task.responsible_email = task.responsible_emails.join(", ");
     task.status = document.getElementById("edit-status").value;
@@ -2782,7 +2745,7 @@ function saveEditedTask() {{
         if (targetZone) targetZone.insertBefore(card, targetZone.querySelector(".column-add-task"));
     }}
     updateColumnCounts();
-    const fields = ["title", "project_id", "project", "owner", "responsible_emails", "status", "due", "description", "attachments"];
+    const fields = ["title", "project_id", "project", "responsible_emails", "status", "due", "description", "attachments"];
     persistTask(task, Object.fromEntries(fields.map(field => [field, task[field]])));
 }}
 
@@ -2874,7 +2837,7 @@ document.addEventListener("visibilitychange", () => {{
 """
 
 
-def board_height(people_count: int) -> int:
+def board_height() -> int:
     # Fixed height keeps the embedded board predictable while its own container scrolls.
     return 760
 
@@ -2886,7 +2849,6 @@ if not TASK_DATABASE_CSV.exists():
 render_app_header()
 
 statuses = st.session_state.statuses
-people = st.session_state.people
 project_ids = st.session_state.project_ids
 if "project_colors" not in st.session_state:
     st.session_state.project_colors = {
@@ -2912,7 +2874,6 @@ with toolbar_filters:
             "Due in the next week", "Due in the next month",
         ], key="filter_due")
         selected_project_ids = st.multiselect("Projects", project_ids, default=project_ids, key="filter_projects")
-        selected_people = st.multiselect("Responsible roles", people, default=people, key="filter_owners")
         st.button("Clear filters", on_click=reset_board_filters, width="stretch")
 
 with st.sidebar:
@@ -3011,47 +2972,6 @@ with st.sidebar:
 
 
     st.divider()
-    st.header("Responsible rows")
-
-    with st.form("rename_people_form"):
-        proposed_people_names = []
-        for index, person in enumerate(people):
-            proposed_people_names.append(
-                st.text_input(f"Row {index + 1}", value=person, key=f"person_name_{index}")
-            )
-
-        rename_people_submitted = st.form_submit_button("Apply row names")
-
-    if rename_people_submitted:
-        success, message = rename_values("people", "owner", proposed_people_names, "Responsible row")
-        if success:
-            st.success(message)
-            st.rerun()
-        st.error(message)
-
-    with st.form("add_person_form"):
-        new_person = st.text_input("New responsible row", placeholder="Process Engineer")
-        add_person_submitted = st.form_submit_button("Add row")
-
-    if add_person_submitted:
-        success, message = add_value("people", new_person, "Responsible row")
-        if success:
-            st.success(message)
-            st.rerun()
-        st.error(message)
-
-    with st.form("remove_people_form"):
-        rows_to_remove = st.multiselect("Rows to remove", people)
-        remove_people_submitted = st.form_submit_button("Remove selected rows")
-
-    if remove_people_submitted:
-        success, message = remove_people(rows_to_remove)
-        if success:
-            st.success(message)
-            st.rerun()
-        st.error(message)
-
-    st.divider()
     st.header("Task files")
 
     selected_task_index = st.selectbox(
@@ -3087,22 +3007,21 @@ filtered_tasks = [
     task | {"storage_key": task["id"]}
     for task in st.session_state.tasks
     if task["project_id"] in selected_project_ids
-    and task["owner"] in selected_people
     and task["status"] in selected_statuses
     and task_matches_filters(task, filter_keyword, filter_members, filter_due)
 ]
 
-quality_todo_tasks = [
+todo_tasks = [
     task
     for task in filtered_tasks
-    if task["owner"] == "Quality Engineer" and task["status"] == "Backlog / To Do"
+    if task["status"] == "Backlog / To Do"
 ]
 
 
 new_task_request = st.session_state.pop("new_task_request", None)
 if new_task_request:
     add_task_dialog(
-        project_ids, people, statuses, users,
+        project_ids, statuses, users,
         initial_status=new_task_request["status"],
         form_key=f"add_task_{new_task_request['event_id']}",
     )
@@ -3110,13 +3029,12 @@ if st.session_state.pop("show_added_task_dialog", False):
     task_added_dialog()
 
 visible_statuses = [status for status in statuses if status in selected_statuses]
-visible_people = [person for person in people if person in selected_people]
-board_html = build_board_html(visible_statuses, visible_people, filtered_tasks)
+board_html = build_board_html(visible_statuses, filtered_tasks)
 kanban_component = components.declare_component(
     "kanban_board", path=str(Path(__file__).parent / "assets" / "kanban_component"),
 )
 kanban_component(
-    html=board_html, height=board_height(len(visible_people)),
+    html=board_html, height=board_height(),
     save_result=st.session_state.get("board_save_result"),
     key="kanban_board", default=None, on_change=on_board_change,
 )
@@ -3134,8 +3052,8 @@ st.markdown(
             <div class="dashboard-value">{project_count}</div>
         </div>
         <div class="dashboard-tile">
-            <div class="dashboard-label">Quality To Do</div>
-            <div class="dashboard-value">{len(quality_todo_tasks)}</div>
+            <div class="dashboard-label">To Do</div>
+            <div class="dashboard-value">{len(todo_tasks)}</div>
         </div>
         <div class="dashboard-tile">
             <div class="dashboard-label">Visible columns</div>

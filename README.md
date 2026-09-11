@@ -29,21 +29,21 @@ Click a column title to rename it directly in the header. Press **Enter** or cli
 
 ### Task Ownership
 
-The default owner roles are Project Manager, Manufacturing Engineer, Quality Engineer, Purchasing, Logistics, and Technical Director. Teams can customize owner roles and assign responsible people to individual tasks using email addresses. Edit a task to change its owner or assignees.
+Assign responsible people to individual tasks using email addresses. Edit a task to change its assignees or add a new email address directly in the selector.
 
 ### Task Cards
 
 Cards show the task title, project, due date, and assignee initials. Open the task details or double-click a card to view or edit additional information, including:
 
 - Project ID and project name.
-- Owner role and responsible people.
+- Responsible people.
 - Status and due date.
 - Description.
 - Attached files, file paths, and document links.
 
 ### Using the Board
 
-1. Click **+** in a column header or **+ Add task** at the bottom of a column. Fill in the project, owner, and due date; the column status is selected automatically.
+1. Click **+** in a column header or **+ Add task** at the bottom of a column. Fill in the project, responsible people, and due date; the column status is selected automatically.
 2. Place planned work in Backlog / To Do.
 3. Move a card to In Progress when work starts.
 4. Update task details and attach supporting documents as needed.
@@ -55,12 +55,12 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 - Shared Kanban board with drag-and-drop task cards.
 - Task creation and editing.
 - Due dates highlighted yellow from today through the next five days, and red when overdue, using the viewer’s local date.
-- Configurable status columns and owner roles.
+- Configurable status columns.
 - Multiple project IDs with customizable colors.
 - Assignment of multiple responsible people to a task, with new email addresses added directly in the responsible-person selector.
 - Task attachments and document links.
-- A top **Filter** button opens keyword, member, status, due-date, project, and owner-role filters. **Clear filters** restores the full board. Due-date filters use the application server’s calendar date.
-- Statistics below the board for visible tasks, projects, Quality To Do tasks, and columns.
+- A top **Filter** button opens keyword, member, status, due-date, and project filters. **Clear filters** restores the full board. Due-date filters use the application server’s calendar date.
+- Statistics below the board for visible tasks, projects, To Do tasks, and columns.
 - Local CSV task storage and actions CSV download.
 
 ## Technology and Storage
