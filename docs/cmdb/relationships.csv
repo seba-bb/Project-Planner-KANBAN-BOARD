@@ -1,0 +1,26 @@
+﻿relationship_id,source_ci_id,relationship,target_ci_id,evidence,reviewed_on
+PP-REL-001,PP-SVC-001,realizowana przez,PP-APP-001,Kod głównej aplikacji,2026-09-11
+PP-REL-002,PP-APP-001,generuje,PP-UI-001,build_board_html,2026-09-11
+PP-REL-003,PP-UI-001,wysyła zdarzenia przez,PP-CMP-001,planner:save i planner:add-task,2026-09-11
+PP-REL-004,PP-CMP-001,przekazuje zdarzenia do,PP-APP-001,on_board_change oraz callback komponentu,2026-09-11
+PP-REL-005,PP-APP-001,działa w,PP-RTE-001,Python w .venv,2026-09-11
+PP-REL-006,PP-RTE-001,znajduje się w,PP-ENV-001,Środowisko projektu PP,2026-09-11
+PP-REL-007,PP-APP-001,korzysta z,PP-PKG-001,import streamlit,2026-09-11
+PP-REL-008,PP-PKG-001,wersja zadeklarowana w,PP-CFG-001,Wymagana wersja różni się od zainstalowanej,2026-09-11
+PP-REL-009,PP-APP-001,inicjalizuje opcje z,PP-CFG-002,initialize_state,2026-09-11
+PP-REL-010,PP-APP-001,odczytuje i zapisuje,PP-DAT-001,load_tasks_from_csv i write_tasks_to_csv,2026-09-11
+PP-REL-011,PP-DAT-001,zlokalizowana w,PP-ENV-001,Katalog aplikacji,2026-09-11
+PP-REL-012,PP-APP-001,zapisuje pliki w,PP-DAT-002,add_attachments_to_task,2026-09-11
+PP-REL-013,PP-DAT-001,zawiera odwołania do,PP-DAT-002,Pole attachments zawiera ścieżki,2026-09-11
+PP-REL-014,PP-DAT-001,zawiera odwołania do,PP-EXT-001,Pole attachments może zawierać linki,2026-09-11
+PP-REL-015,PP-UI-001,odczytuje i zapisuje,PP-DAT-003,localStorage w przeglądarce,2026-09-11
+PP-REL-016,PP-DAT-003,identyfikuje ticket przez id z,PP-DAT-001,Klucz ewm-task-meta:<ticket-id>,2026-09-11
+PP-REL-017,PP-APP-001,utrzymuje,PP-DAT-004,st.session_state,2026-09-11
+PP-REL-018,PP-DAT-004,ładuje zadania z,PP-DAT-001,initialize_state,2026-09-11
+PP-REL-019,PP-SRC-001,wersjonuje,PP-APP-001,app.py,2026-09-11
+PP-REL-020,PP-SRC-001,wersjonuje,PP-CMP-001,assets/kanban_component/index.html,2026-09-11
+PP-REL-021,PP-SRC-001,wersjonuje,PP-CFG-001,requirements.txt,2026-09-11
+PP-REL-022,PP-SRC-001,wersjonuje,PP-TST-001,tests/test_task_persistence.py,2026-09-11
+PP-REL-023,PP-SRC-001,wersjonuje,PP-AST-001,assets/,2026-09-11
+PP-REL-024,PP-TST-001,weryfikuje,PP-APP-001,Funkcje walidacji i trwałości danych,2026-09-11
+PP-REL-025,PP-APP-001,wyświetla,PP-AST-001,APP_ICON_PATH i nagłówek,2026-09-11

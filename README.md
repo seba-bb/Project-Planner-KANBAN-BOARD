@@ -70,6 +70,10 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 
 The application starts with sample tasks when no CSV task database exists. Saving a ticket writes its assignments and edited fields to the CSV; dragging a card saves its status. Saved changes survive page reloads. Existing CSV files receive stable ticket IDs automatically.
 
+## Configuration Inventory
+
+[CMDB — configuration items, dependencies, storage, and recovery notes](CMDB.md) (Polish). Machine-readable registers are available in [docs/cmdb](docs/cmdb).
+
 ## Run Locally
 
 Run the application from the repository directory using the project virtual environment:
