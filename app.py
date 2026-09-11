@@ -542,11 +542,15 @@ st.set_page_config(
     page_title="Project Planner",
     page_icon=str(APP_ICON_PATH),
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
     """
     <style>
+        [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {
+            display: none;
+        }
         .block-container {
             padding-top: 1.6rem;
             padding-bottom: 2rem;
@@ -1123,7 +1127,6 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
         "statuses": statuses,
         "labels": load_board_labels(),
         "users": st.session_state.users,
-        "project_colors": project_color_payload(),
         "tasks": board_tasks,
     }
     payload = json.dumps(board_data).replace("<", "\\u003c")
@@ -1367,21 +1370,6 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
         min-width: 0;
         overflow-wrap: anywhere;
     }}
-    .task-project-id-badge {{
-        background: var(--project-bg, #eff6ff);
-        border: 1px solid var(--project-border, #bfdbfe);
-        border-radius: 999px;
-        color: var(--project-text, #1d4ed8);
-        flex: 0 0 auto;
-        font-size: 11px;
-        font-weight: 900;
-        line-height: 1;
-        max-width: 84px;
-        overflow: hidden;
-        padding: 5px 7px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }}
     .task-summary {{
         color: #475569;
         font-size: 12px;
@@ -1517,6 +1505,7 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
     }}
 
     .task-label-section {{ position: relative; }}
+    .label-chips:empty {{ display: none; }}
     .label-chips {{ display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }}
     .label-chip {{ display: inline-block; padding: 5px 10px; border-radius: 4px; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }}
     .labels-button, .labels-wide-button, .label-editor-actions button {{ background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 10px; color: #334155; cursor: pointer; }}
@@ -1536,7 +1525,6 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
     .label-color-title {{ margin-top: 10px; color: #334155; font-size: 12px; font-weight: 800; }}
     .label-editor-actions {{ display: flex; gap: 8px; margin-top: 10px; }}
     #label-error {{ color: #b91c1c; font-size: 12px; margin-top: 6px; }}
-    .label-patterns .label-chip {{ background-image: repeating-linear-gradient(135deg, transparent 0 7px, #ffffff44 7px 10px); }}
     .modal-layout {{
         display: grid;
         gap: 18px;
@@ -1903,6 +1891,28 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
             <div class="modal-main">
                 <div class="form-grid">
                     <label>Task title<input id="edit-title" type="text"></label>
+                    <div class="task-label-section" id="task-label-section">
+                        <div id="selected-labels" class="label-chips" aria-label="Selected labels"></div>
+                        <button type="button" id="labels-toggle" class="labels-button" aria-expanded="false" aria-controls="labels-popover">◇ Labels</button>
+                        <section id="labels-popover" class="labels-popover" hidden aria-label="Labels">
+                            <div class="labels-heading"><strong>Labels</strong><button type="button" id="labels-close" aria-label="Close labels">×</button></div>
+                            <div id="labels-list-view">
+                                <input id="labels-search" type="search" placeholder="Search labels…" aria-label="Search labels">
+                                <div id="labels-options"></div>
+                                <button type="button" id="label-create" class="labels-wide-button">Create a new label</button>
+                            </div>
+                            <div id="label-editor" hidden>
+                                <label>Label name<input id="label-name" type="text" maxlength="80"></label>
+                                <div class="label-color-title">Color</div>
+                                <div id="label-colors" class="label-colors" role="group" aria-label="Label color"></div>
+                                <div id="label-preview" class="label-chip"></div>
+                                <div class="label-editor-actions"><button type="button" id="label-apply">Apply label</button><button type="button" id="label-back">Back</button></div>
+                                <div id="label-error" role="alert"></div>
+                            </div>
+                            <p class="modal-note">Click Save changes to save labels and selections. Editing a label updates it across the board.</p>
+                        </section>
+                    </div>
+                    <label>Details<textarea id="edit-description"></textarea></label>
                     <div class="field-label">Responsible people
                         <div class="responsible-multiselect" id="edit-responsible-people">
                             <div id="responsible-control" class="responsible-control" tabindex="0" role="button" aria-expanded="false">
@@ -1922,29 +1932,6 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
                     </div>
                     <label>Column/status<select id="edit-status"></select></label>
                     <label>Due date<input id="edit-due" type="date"></label>
-                    <label>Details<textarea id="edit-description"></textarea></label>
-                    <div class="task-label-section" id="task-label-section">
-                        <div id="selected-labels" class="label-chips" aria-label="Selected labels"></div>
-                        <button type="button" id="labels-toggle" class="labels-button" aria-expanded="false" aria-controls="labels-popover">◇ Labels</button>
-                        <section id="labels-popover" class="labels-popover" hidden aria-label="Labels">
-                            <div class="labels-heading"><strong>Labels</strong><button type="button" id="labels-close" aria-label="Close labels">×</button></div>
-                            <div id="labels-list-view">
-                                <input id="labels-search" type="search" placeholder="Search labels…" aria-label="Search labels">
-                                <div id="labels-options"></div>
-                                <button type="button" id="label-create" class="labels-wide-button">Create a new label</button>
-                            </div>
-                            <div id="label-editor" hidden>
-                                <label>Label name<input id="label-name" type="text" maxlength="80"></label>
-                                <div class="label-color-title">Color</div>
-                                <div id="label-colors" class="label-colors" role="group" aria-label="Label color"></div>
-                                <div id="label-preview" class="label-chip"></div>
-                                <div class="label-editor-actions"><button type="button" id="label-apply">Apply label</button><button type="button" id="label-back">Back</button></div>
-                                <div id="label-error" role="alert"></div>
-                            </div>
-                            <button type="button" id="labels-patterns" class="labels-wide-button" aria-pressed="false">Enable colorblind friendly mode</button>
-                            <p class="modal-note">Click Save changes to save labels and selections. Editing a label updates it across the board.</p>
-                        </section>
-                    </div>
                     <label>Attached files<textarea id="edit-attachments" placeholder="One file name or link per line"></textarea></label>
                     <div id="edit-attachment-links" class="attachment-list"></div>
                     <div class="modal-note">Saved files and links can be opened from this list.</div>
@@ -2001,14 +1988,6 @@ const labelPalette = [
     ["Red", "#f87168"], ["Purple", "#9f8fef"], ["Blue", "#579dff"],
     ["Sky", "#6cc3e0"], ["Lime", "#94c748"], ["Pink", "#e774bb"], ["Gray", "#b6c2cf"],
 ];
-let labelPatterns = false;
-try {{ labelPatterns = localStorage.getItem("planner-label-patterns") === "true"; }} catch (_) {{}}
-function applyLabelPatterns() {{
-    document.body.classList.toggle("label-patterns", labelPatterns);
-    const button = document.getElementById("labels-patterns");
-    button.setAttribute("aria-pressed", String(labelPatterns));
-    button.textContent = `${{labelPatterns ? "Disable" : "Enable"}} colorblind friendly mode`;
-}}
 function labelChip(label) {{
     const chip = document.createElement("span");
     chip.className = "label-chip";
@@ -2124,18 +2103,12 @@ document.getElementById("label-name").addEventListener("input", updateLabelPrevi
 document.getElementById("label-name").addEventListener("keydown", event => {{
     if (event.key === "Enter") {{ event.preventDefault(); applyLabelEditor(); }}
 }});
-document.getElementById("labels-patterns").addEventListener("click", () => {{
-    labelPatterns = !labelPatterns;
-    try {{ localStorage.setItem("planner-label-patterns", String(labelPatterns)); }} catch (_) {{}}
-    applyLabelPatterns();
-}});
 document.getElementById("labels-popover").addEventListener("keydown", event => {{
     if (event.key === "Escape") {{ event.stopPropagation(); setLabelsOpen(false); document.getElementById("labels-toggle").focus(); }}
 }});
 document.addEventListener("click", event => {{
     if (!document.getElementById("task-label-section").contains(event.target)) setLabelsOpen(false);
 }});
-applyLabelPatterns();
 
 function persistTask(task, updates, labelChanges = []) {{
     if (pendingSaveId) return;
@@ -2191,35 +2164,6 @@ function cardClass(status) {{
 
 function text(value) {{
     return String(value ?? "");
-}}
-
-const projectColors = [
-    {{ bg: "#eff6ff", border: "#bfdbfe", text: "#1d4ed8" }},
-    {{ bg: "#f0fdf4", border: "#bbf7d0", text: "#15803d" }},
-    {{ bg: "#fff7ed", border: "#fed7aa", text: "#c2410c" }},
-    {{ bg: "#f5f3ff", border: "#ddd6fe", text: "#6d28d9" }},
-    {{ bg: "#ecfeff", border: "#a5f3fc", text: "#0e7490" }},
-    {{ bg: "#fdf2f8", border: "#fbcfe8", text: "#be185d" }},
-    {{ bg: "#fefce8", border: "#fde68a", text: "#a16207" }},
-    {{ bg: "#f1f5f9", border: "#cbd5e1", text: "#334155" }},
-];
-
-function projectColor(projectId) {{
-    const value = text(projectId);
-    if (data.project_colors && data.project_colors[value]) return data.project_colors[value];
-
-    let hash = 0;
-    for (let index = 0; index < value.length; index += 1) {{
-        hash = (hash + value.charCodeAt(index) * (index + 1)) % projectColors.length;
-    }}
-    return projectColors[hash];
-}}
-
-function applyProjectBadgeColor(badge, projectId) {{
-    const color = projectColor(projectId);
-    badge.style.setProperty("--project-bg", color.bg);
-    badge.style.setProperty("--project-border", color.border);
-    badge.style.setProperty("--project-text", color.text);
 }}
 
 function findTask(taskId) {{
@@ -2845,11 +2789,6 @@ function updateCardFromTask(card, task) {{
     renderDueDate(card.querySelector(".due-current"), task.due);
     renderAssignees(card.querySelector(".task-assignees"), task);
     renderTaskLabels(card.querySelector(".task-labels"), task.labels);
-    const projectBadge = card.querySelector(".task-project-id-badge");
-    if (projectBadge) {{
-        projectBadge.textContent = text(task.project_id);
-        applyProjectBadgeColor(projectBadge, task.project_id);
-    }}
     card.querySelector(".responsible-email").textContent = responsibleEmailsText(task) || "No responsible person selected";
     card.querySelector(".status").textContent = text(task.status);
     card.querySelector(".description").textContent = text(task.description);
@@ -2865,13 +2804,8 @@ function createTaskCard(task) {{
     card.innerHTML = `
         <div class="task-card-header">
             <div class="task-title"></div>
-            <span class="task-project-id-badge"></span>
         </div>
-        <div class="task-summary">
-            <strong>Project:</strong> <span class="project"></span><br>
-            <strong>Due:</strong> <span class="due-stack"><span class="due-history"></span><span class="due-current"></span></span>
-        </div>
-        <div class="task-assignees" role="group" aria-label="Responsible people"></div>
+        <div class="task-labels label-chips" aria-label="Task labels"></div>
         <details>
             <summary>Details</summary>
             <div class="task-details">
@@ -2881,7 +2815,11 @@ function createTaskCard(task) {{
                 <strong>Attachments:</strong> <span class="attachments attachment-list"></span>
             </div>
         </details>
-        <div class="task-labels label-chips" aria-label="Task labels"></div>
+        <div class="task-summary">
+            <strong>Project:</strong> <span class="project"></span><br>
+            <strong>Due:</strong> <span class="due-stack"><span class="due-history"></span><span class="due-current"></span></span>
+        </div>
+        <div class="task-assignees" role="group" aria-label="Responsible people"></div>
     `;
     updateCardFromTask(card, task);
 
@@ -3131,133 +3069,6 @@ with toolbar_filters:
         ], key="filter_due")
         selected_project_ids = st.multiselect("Projects", project_ids, default=project_ids, key="filter_projects")
         st.button("Clear filters", on_click=reset_board_filters, width="stretch")
-
-with st.sidebar:
-    st.download_button(
-        "Download actions CSV",
-        data=task_database_csv_bytes(),
-        file_name=TASK_DATABASE_CSV.name,
-        mime="text/csv",
-    )
-    st.caption(f"CSV database: {TASK_DATABASE_CSV.name}")
-
-    st.divider()
-    st.header("Project ID colors")
-    with st.form("project_id_colors_form"):
-        proposed_project_colors = {}
-        for project_id in project_ids:
-            current_color = st.session_state.project_colors.get(project_id, default_project_color(project_id))
-            proposed_project_colors[project_id] = st.color_picker(
-                project_id,
-                value=normalize_hex_color(current_color),
-                key=f"project_color_{project_id}",
-            )
-
-        project_colors_submitted = st.form_submit_button("Apply project colors")
-
-    if project_colors_submitted:
-        st.session_state.project_colors.update(
-            {
-                project_id: normalize_hex_color(color)
-                for project_id, color in proposed_project_colors.items()
-            }
-        )
-        st.success("Project ID colors updated.")
-        st.rerun()
-
-
-    st.divider()
-    st.header("Board columns")
-
-    with st.form("rename_columns_form"):
-        proposed_status_names = []
-        for index, status in enumerate(statuses):
-            proposed_status_names.append(
-                st.text_input(f"Column {index + 1}", value=status, key=f"column_name_{index}_{status}")
-            )
-
-        rename_columns_submitted = st.form_submit_button("Apply column names")
-
-    if rename_columns_submitted:
-        success, message = rename_values("statuses", "status", proposed_status_names, "Column")
-        if success:
-            st.success(message)
-            st.rerun()
-        st.error(message)
-
-    with st.form("add_column_form"):
-        new_column_name = st.text_input("New column name", placeholder="Waiting for approval")
-        add_column_submitted = st.form_submit_button("Add column")
-
-    if add_column_submitted:
-        success, message = add_value("statuses", new_column_name, "Column")
-        if success:
-            st.success(message)
-            st.rerun()
-        st.error(message)
-
-    st.divider()
-    st.header("Project IDs")
-
-    with st.form("rename_project_ids_form"):
-        proposed_project_ids = []
-        for index, project_id in enumerate(project_ids):
-            proposed_project_ids.append(
-                st.text_input(f"Project ID {index + 1}", value=project_id, key=f"project_id_{index}")
-            )
-
-        rename_projects_submitted = st.form_submit_button("Apply project IDs")
-
-    if rename_projects_submitted:
-        success, message = rename_values("project_ids", "project_id", proposed_project_ids, "Project ID")
-        if success:
-            st.success(message)
-            st.rerun()
-        st.error(message)
-
-    with st.form("add_project_id_form"):
-        new_project_id = st.text_input("New project ID", placeholder="PRJ-004")
-        add_project_submitted = st.form_submit_button("Add project ID")
-
-    if add_project_submitted:
-        success, message = add_value("project_ids", new_project_id, "Project ID")
-        if success:
-            st.success(message)
-            st.rerun()
-        st.error(message)
-
-
-    st.divider()
-    st.header("Task files")
-
-    selected_task_index = st.selectbox(
-        "Existing task",
-        range(len(st.session_state.tasks)),
-        format_func=lambda index: task_option_label(st.session_state.tasks[index]),
-    )
-    current_attachments = st.session_state.tasks[selected_task_index].get("attachments", [])
-    current_attachment_text = ", ".join(current_attachments) or "No files attached"
-    st.caption(f"Current files: {current_attachment_text}")
-    existing_task_files = st.file_uploader(
-        "Add files",
-        accept_multiple_files=True,
-        key="existing_task_files",
-    )
-    typed_attachment_names = st.text_area(
-        "File paths or links",
-        placeholder="Paste one file path or SharePoint link per line",
-    )
-
-    if st.button("Attach to task", key="attach_existing_task_files"):
-        success, message = add_attachments_to_task(
-            selected_task_index,
-            existing_task_files,
-            typed_attachment_names,
-        )
-        if success:
-            st.success(message)
-            st.rerun()
-        st.error(message)
 
 filtered_tasks = [
     task | {"storage_key": task["id"]}

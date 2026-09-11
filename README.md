@@ -33,7 +33,7 @@ Assign responsible people to individual tasks using email addresses. Edit a task
 
 ### Task Cards
 
-Cards show the task title, project, due date, and assignee initials. Open the task details or double-click a card to view or edit additional information, including:
+Cards show the task title, labels directly underneath, and then Details. Project names, due dates, and assignee initials remain visible; Project ID badges are removed. Open the task details or double-click a card to view or edit additional information, including:
 
 - Colored labels.
 - Responsible people.
@@ -43,9 +43,9 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 
 ### Task Labels
 
-Open a task and click **Labels** below its Details field. Search the shared label list and check one or more labels, or choose **Create a new label**, enter a name, select a color, and click **Apply label**. Use the pencil beside a label to edit its name or color. **Save changes** saves the ticket’s selections and label edits; **Cancel** discards them. Editing a shared label updates its appearance on every ticket using it.
+Open a task and click **Labels** below its title; the Details field follows the labels. Search the shared label list and check one or more labels, or choose **Create a new label**, enter a name, select a color, and click **Apply label**. Use the pencil beside a label to edit its name or color. **Save changes** saves the ticket’s selections and label edits; **Cancel** discards them. Editing a shared label updates its appearance on every ticket using it.
 
-Selected labels appear below the task details on cards. Uncheck a label to remove it from a ticket; it stays available for other tickets. The picker also has an optional colorblind-friendly display mode with patterns. Project ID and project name remain on the board and in storage, but are no longer fields in the task details editor.
+Selected labels appear directly below the title and above Details on cards. Uncheck a label to remove it from a ticket; it stays available for other tickets. Project assignments remain stored, but Project ID badges and project fields are not shown in task details.
 
 ### Using the Board
 
@@ -63,12 +63,13 @@ Selected labels appear below the task details on cards. Uncheck a label to remov
 - Shared colored labels with search, multiple selections, and inline creation and editing.
 - Due dates highlighted yellow from today through the next five days, and red when overdue, using the viewer’s local date.
 - Configurable status columns.
-- Multiple project IDs with customizable colors.
+- Project-based task filtering.
 - Assignment of multiple responsible people to a task, with new email addresses added directly in the responsible-person selector.
 - Task attachments and document links.
 - A top **Filter** button opens keyword, member, status, due-date, and project filters. **Clear filters** restores the full board. Due-date filters use the application server’s calendar date.
 - Statistics below the board for visible tasks, projects, To Do tasks, and columns.
-- Local CSV task storage and actions CSV download.
+- Local CSV task storage.
+- Full-width board without a left sidebar; column controls are available directly in the board headers.
 
 ## Technology and Storage
 
