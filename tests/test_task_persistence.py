@@ -231,6 +231,42 @@ class TaskPersistenceTests(unittest.TestCase):
         self.assertFalse(self.state.board_save_result['ok'])
         self.assertEqual(self.namespace['load_board_columns']().count('Review'), 1)
 
+    def test_stale_session_add_preserves_columns_saved_by_another_session(self):
+        old_snapshot = self.state.statuses.copy()
+        self.namespace['add_value']('statuses', 'First new', 'Column')
+        self.state.statuses = old_snapshot
+        success, message = self.namespace['add_value']('statuses', 'Second new', 'Column')
+        self.assertTrue(success, message)
+        self.assertEqual(self.namespace['load_board_columns'](), old_snapshot + ['First new', 'Second new'])
+        self.assertEqual(self.state.statuses, self.namespace['load_board_columns']())
+
+    def test_stale_session_cannot_duplicate_a_saved_column(self):
+        old_snapshot = self.state.statuses.copy()
+        self.namespace['add_value']('statuses', 'Shared column', 'Column')
+        self.state.statuses = old_snapshot
+        before = self.namespace['BOARD_COLUMNS_JSON'].read_bytes()
+        success, _ = self.namespace['add_value']('statuses', 'Shared column', 'Column')
+        self.assertFalse(success)
+        self.assertEqual(self.namespace['BOARD_COLUMNS_JSON'].read_bytes(), before)
+
+    def test_stale_rename_and_reorder_retain_later_column_additions(self):
+        old_snapshot = self.state.statuses.copy()
+        self.namespace['add_value']('statuses', 'Shared column', 'Column')
+        self.state.statuses = old_snapshot.copy()
+        success, message = self.namespace['rename_board_columns'](['Ready', *old_snapshot[1:]])
+        self.assertTrue(success, message)
+        self.assertEqual(self.namespace['load_board_columns'](), ['Ready', *old_snapshot[1:], 'Shared column'])
+        self.state.statuses = ['Ready', *old_snapshot[1:]]
+        success, message = self.namespace['move_board_column']('Completed', 'Ready', 'before')
+        self.assertTrue(success, message)
+        self.assertIn('Shared column', self.namespace['load_board_columns']())
+
+    def test_pending_filter_updates_accumulate_consecutive_additions(self):
+        self.state.status_filter = ['Completed']
+        self.namespace['add_value']('statuses', 'First new', 'Column')
+        self.namespace['add_value']('statuses', 'Second new', 'Column')
+        self.assertEqual(self.state.updated_status_filter, ['Completed', 'First new', 'Second new'])
+
     def test_keyword_members_and_due_filters(self):
         matches = self.namespace['task_matches_filters']
         task = self.state.tasks[0]

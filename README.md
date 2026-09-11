@@ -25,7 +25,7 @@ Each task appears as a card. Columns represent task status. Drag a card between 
 | Completed | Tasks that have been finished. |
 | Rejected | Tasks that have been declined or will not be continued. |
 
-Click a column title to rename it directly in the header. Press **Enter** or click outside to save; **Escape** cancels. Empty and duplicate names are rejected. Column names and order are saved in `board_columns.json`, including empty columns, and existing tickets keep their assignments. Drag a column header to change its position; the header lifts and highlights while dragging. Click the shaded **+ Add column** header on the right to create a column in place. Column order is saved alongside column names. After adding a column, the board scrolls to the Add column header and opens a fresh name field so you can keep adding columns.
+Click a column title to rename it directly in the header. Press **Enter** or click outside to save; **Escape** cancels. Empty and duplicate names are rejected. Column names and order are saved in `board_columns.json`, including empty columns, and existing tickets keep their assignments. Drag a column header to change its position; the header lifts and highlights while dragging. Click the shaded **+ Add column** header on the right to create a column in place. Column order is saved alongside column names. Changes use the latest saved column list so an older browser session retains columns added by another session. After adding a column, the board scrolls to the Add column header and opens a fresh name field so you can keep adding columns.
 
 ### Task Ownership
 
@@ -62,7 +62,7 @@ Old entries that contain only a filename without a saved file are marked unavail
 3. Move a card to In Progress when work starts.
 4. Update task details and attach supporting documents as needed.
 5. Move finished tasks to Completed, or declined tasks to Rejected.
-6. Open **Filter** above the board to focus on relevant tasks; filters across categories are combined. **Labels** matches any selected label, and **No labels** finds unlabelled tickets.
+6. Open **Filter** above the board to focus on relevant tasks; filters across categories are combined. **Labels** matches any selected label, and **No labels** finds unlabelled tickets. Filters narrow the tickets while every saved column remains visible, including empty columns.
 
 ## Current Features
 
@@ -130,4 +130,4 @@ npm ci --prefix tests/ui
 npm test --prefix tests/ui
 ```
 
-The UI regression tests use jsdom and the project VENV to render an isolated board. They cover repeated column creation, iframe refreshes, and failed-save retries without opening or modifying the live CSV.
+The UI regression tests use jsdom and the project VENV to render an isolated board. They cover repeated column creation, iframe refreshes, and failed-save retries without opening or modifying the live CSV. Python integration tests also exercise multiple Streamlit sessions and status-filter changes against temporary storage.

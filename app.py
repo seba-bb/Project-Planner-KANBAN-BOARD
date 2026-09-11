@@ -408,6 +408,12 @@ def rename_board_columns(new_names: list[str]) -> tuple[bool, str]:
     rename_map = dict(zip(old_names, names, strict=True))
     wrote_tasks = False
     try:
+        latest_names = load_board_columns() if BOARD_COLUMNS_JSON.exists() else old_names
+        if set(old_names) - set(latest_names):
+            return False, "Columns changed in another session. Reload the board before renaming."
+        names = [rename_map.get(name, name) for name in latest_names]
+        if len(set(names)) != len(names):
+            return False, "Column names must be unique."
         original_tasks = load_tasks_from_csv()
         tasks = [task | {"status": rename_map.get(task["status"], task["status"])} for task in original_tasks]
         if tasks != original_tasks:
@@ -447,7 +453,10 @@ def apply_column_rename(event: dict[str, object]) -> None:
 
 
 def move_board_column(status: str, target: str, position: str) -> tuple[bool, str]:
-    columns = st.session_state.statuses.copy()
+    try:
+        columns = load_board_columns() if BOARD_COLUMNS_JSON.exists() else st.session_state.statuses.copy()
+    except (OSError, ValueError) as error:
+        return False, f"Column order was not saved: {error}"
     if (not all(isinstance(value, str) for value in (status, target, position))
             or status not in columns or target not in columns or position not in {"before", "after"}):
         return False, "The column order changed. Reload the board and try again."
@@ -648,8 +657,8 @@ st.markdown(
 def initialize_state() -> None:
     # Streamlit reruns the script after most interactions. Session state preserves
     # user-edited lists and tasks across those reruns inside the current browser session.
-    if "statuses" not in st.session_state:
-        st.session_state.statuses = load_board_columns()
+    # Column configuration is shared across browser sessions; disk is authoritative.
+    st.session_state.statuses = load_board_columns()
     if "updated_status_filter" in st.session_state:
         st.session_state.status_filter = st.session_state.pop("updated_status_filter")
     if "project_ids" not in st.session_state:
@@ -661,8 +670,8 @@ def initialize_state() -> None:
         }
     if "users" not in st.session_state:
         st.session_state.users = DEFAULT_USERS.copy()
-    if "tasks" not in st.session_state:
-        st.session_state.tasks = load_tasks_from_csv()
+    # Read matching saved task statuses so a stale session cannot revive renamed columns.
+    st.session_state.tasks = load_tasks_from_csv()
 
     for task in st.session_state.tasks:
         task.setdefault("id", uuid4().hex)
@@ -881,17 +890,24 @@ def add_value(state_key: str, value: str, item_label: str) -> tuple[bool, str]:
     if not cleaned_value:
         return False, f"Enter a {item_label.lower()} first."
 
-    if cleaned_value in st.session_state[state_key]:
-        return False, f"This {item_label.lower()} already exists."
-
     if state_key == "statuses":
         try:
-            write_board_columns([*st.session_state.statuses, cleaned_value])
-        except OSError as error:
+            # Never rewrite shared configuration from an older browser's snapshot.
+            columns = load_board_columns() if BOARD_COLUMNS_JSON.exists() else st.session_state.statuses.copy()
+            if cleaned_value in columns:
+                return False, "This column already exists."
+            columns.append(cleaned_value)
+            write_board_columns(columns)
+        except (OSError, ValueError) as error:
             return False, f"Column was not saved: {error}"
+        st.session_state.statuses = columns
         if "status_filter" in st.session_state:
-            st.session_state.updated_status_filter = [*st.session_state.status_filter, cleaned_value]
-    st.session_state[state_key].append(cleaned_value)
+            selected = st.session_state.get("updated_status_filter", st.session_state.status_filter)
+            st.session_state.updated_status_filter = list(dict.fromkeys([*selected, cleaned_value]))
+    else:
+        if cleaned_value in st.session_state[state_key]:
+            return False, f"This {item_label.lower()} already exists."
+        st.session_state[state_key].append(cleaned_value)
     return True, f"Added {item_label.lower()}: {cleaned_value}."
 
 
@@ -3309,6 +3325,8 @@ if st.session_state.pop("show_task_created_notice", False):
         st.warning(notification["message"])
 
 statuses = st.session_state.statuses
+if "status_filter" not in st.session_state:
+    st.session_state.status_filter = statuses.copy()
 project_ids = st.session_state.project_ids
 if "project_colors" not in st.session_state:
     st.session_state.project_colors = {
@@ -3325,7 +3343,7 @@ with toolbar_filters:
         st.markdown("**Filter**")
         filter_keyword = st.text_input("Keyword", placeholder="Enter a keyword…", key="filter_keyword")
         filter_members = st.multiselect("Members", ["No members", *users], key="filter_members", placeholder="Any member")
-        selected_statuses = st.multiselect("Card status", statuses, default=statuses, key="status_filter")
+        selected_statuses = st.multiselect("Card status", statuses, key="status_filter")
         filter_due = st.selectbox("Due date", [
             "Any date", "No date", "Overdue", "Due today", "Due in the next day",
             "Due in the next week", "Due in the next month",
@@ -3352,7 +3370,8 @@ todo_tasks = [
 ]
 
 
-visible_statuses = [status for status in statuses if status in selected_statuses]
+# Filters narrow cards; they must not remove saved columns from the board.
+visible_statuses = statuses.copy()
 board_html = build_board_html(visible_statuses, filtered_tasks)
 kanban_component = components.declare_component(
     "kanban_board", path=str(Path(__file__).parent / "assets" / "kanban_component"),
@@ -3381,7 +3400,7 @@ st.markdown(
         </div>
         <div class="dashboard-tile">
             <div class="dashboard-label">Visible columns</div>
-            <div class="dashboard-value">{len(selected_statuses)}</div>
+            <div class="dashboard-value">{len(visible_statuses)}</div>
         </div>
     </div>
     """,

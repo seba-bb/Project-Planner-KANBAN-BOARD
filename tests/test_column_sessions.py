@@ -1,0 +1,82 @@
+"""Exercise actual Streamlit callbacks and filters using a test component bridge."""
+import json
+from pathlib import Path
+import re
+import shutil
+import tempfile
+import unittest
+
+from streamlit.testing.v1 import AppTest
+
+
+class ColumnSessionTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.target = Path(self.directory.name)
+        root = Path(__file__).resolve().parents[1]
+        shutil.copy2(root / 'notifications.py', self.target / 'notifications.py')
+        shutil.copytree(root / 'assets', self.target / 'assets')
+        source = (root / 'app.py').read_text(encoding='utf-8-sig')
+        # AppTest cannot drive custom iframe widgets. Adapt only that transport to
+        # a text widget, retaining the production callback and all filter widgets.
+        shim = '''
+def declare_test_component(*args, **kwargs):
+    def render(**options):
+        def receive():
+            st.session_state.kanban_board = json.loads(st.session_state.test_board_event)
+            options["on_change"]()
+        st.text_input("Board event", key="test_board_event", on_change=receive)
+        st.session_state.test_board_html = options["html"]
+    return render
+
+'''
+        source = source.replace('initialize_state()\nif not TASK_DATABASE_CSV.exists():', shim + 'initialize_state()\nif not TASK_DATABASE_CSV.exists():')
+        source = source.replace('kanban_component = components.declare_component(', 'kanban_component = declare_test_component(')
+        self.app_path = self.target / 'app.py'
+        self.app_path.write_text(source, encoding='utf-8-sig')
+
+    def session(self):
+        app = AppTest.from_file(str(self.app_path)).run(timeout=15)
+        self.assertFalse(app.exception)
+        return app
+
+    def event(self, app, **event):
+        app.text_input(key='test_board_event').set_value(json.dumps(event)).run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertTrue(app.session_state.board_save_result['ok'])
+
+    def board(self, app):
+        return json.loads(re.search(r'const data = (.*);\n', app.session_state.test_board_html)[1])
+
+    def test_status_filter_does_not_hide_previously_added_columns(self):
+        app = self.session()
+        original = app.session_state.statuses.copy()
+        self.event(app, event_id='first', action='add_column', name='First new')
+        # Simulate a browser still posting its earlier status-filter selection.
+        app.multiselect(key='status_filter').set_value(original)
+        self.event(app, event_id='second', action='add_column', name='Second new')
+        expected = original + ['First new', 'Second new']
+        self.assertEqual(self.board(app)['statuses'], expected)
+        self.assertEqual(json.loads((self.target / 'board_columns.json').read_text()), expected)
+        app.multiselect(key='status_filter').set_value(['Completed']).run(timeout=15)
+        self.assertEqual(self.board(app)['statuses'], expected)
+        self.assertTrue(all(task['status'] == 'Completed' for task in self.board(app)['tasks']))
+
+    def test_two_sessions_keep_both_additions_and_reload_renamed_statuses(self):
+        first, second = self.session(), self.session()
+        original = first.session_state.statuses.copy()
+        self.event(first, event_id='first', action='add_column', name='First new')
+        self.event(second, event_id='second', action='add_column', name='Second new')
+        expected = original + ['First new', 'Second new']
+        self.assertEqual(self.board(second)['statuses'], expected)
+        self.event(first, event_id='rename', action='rename_column', status=original[0], name='Ready')
+        second.text_input(key='filter_keyword').set_value('parts').run(timeout=15)
+        self.assertFalse(second.exception)
+        self.assertEqual(self.board(second)['statuses'], ['Ready', *expected[1:]])
+        self.assertNotIn(original[0], {task['status'] for task in second.session_state.tasks})
+        self.assertEqual(self.board(self.session())['statuses'], ['Ready', *expected[1:]])
+
+
+if __name__ == '__main__':
+    unittest.main()
