@@ -68,7 +68,7 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 - **Task storage:** `project_planner_actions.csv` in the application directory.
 - **Attachments:** Local files and references to file paths or document links.
 
-The application starts with sample tasks when no CSV task database exists.
+The application starts with sample tasks when no CSV task database exists. Saving a ticket writes its assignments and edited fields to the CSV; dragging a card saves its status. Saved changes survive page reloads. Existing CSV files receive stable ticket IDs automatically.
 
 ## Run Locally
 

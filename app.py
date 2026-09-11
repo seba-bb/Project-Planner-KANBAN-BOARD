@@ -4,6 +4,9 @@ import base64
 import csv
 import json
 import mimetypes
+import os
+import tempfile
+from uuid import uuid4
 from pathlib import Path
 from html import escape
 from io import StringIO
@@ -38,6 +41,7 @@ APP_ICON_PATH = Path(__file__).parent / "assets" / "project_planner_icon.png"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"
 TASK_DATABASE_CSV = Path(__file__).parent / "project_planner_actions.csv"
 TASK_CSV_FIELDS = [
+    "id",
     "title",
     "owner",
     "responsible_emails",
@@ -168,6 +172,7 @@ def task_from_csv_row(row: dict[str, str]) -> dict[str, object]:
     responsible_emails = csv_json_list(row.get("responsible_emails", ""))
     attachments = csv_json_list(row.get("attachments", ""))
     task = {
+        "id": row.get("id") or uuid4().hex,
         "title": row.get("title", "Untitled task"),
         "owner": row.get("owner", DEFAULT_PEOPLE[0]),
         "responsible_emails": responsible_emails,
@@ -200,6 +205,7 @@ def csv_json_list(value: object) -> list[str]:
 def task_to_csv_row(task: dict[str, object]) -> dict[str, str]:
     responsible_emails = responsible_emails_list(task)
     return {
+        "id": str(task["id"]),
         "title": str(task.get("title", "")),
         "owner": str(task.get("owner", "")),
         "responsible_emails": json.dumps(responsible_emails, ensure_ascii=False),
@@ -218,15 +224,81 @@ def load_tasks_from_csv() -> list[dict[str, object]]:
         return [task.copy() for task in DEFAULT_TASKS]
 
     with TASK_DATABASE_CSV.open("r", newline="", encoding="utf-8-sig") as csv_file:
-        return [task_from_csv_row(row) for row in csv.DictReader(csv_file)]
+        reader = csv.DictReader(csv_file)
+        needs_ids = "id" not in (reader.fieldnames or [])
+        rows = list(reader)
+        needs_ids = needs_ids or any(not row.get("id") for row in rows)
+        tasks = [task_from_csv_row(row) for row in rows]
+    if needs_ids:
+        write_tasks_to_csv(tasks)
+    return tasks
+
+
+def write_tasks_to_csv(tasks: list[dict[str, object]]) -> None:
+    TASK_DATABASE_CSV.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", newline="", encoding="utf-8-sig",
+            dir=TASK_DATABASE_CSV.parent, delete=False,
+        ) as csv_file:
+            temporary_path = Path(csv_file.name)
+            writer = csv.DictWriter(csv_file, fieldnames=TASK_CSV_FIELDS)
+            writer.writeheader()
+            writer.writerows(task_to_csv_row(task) for task in tasks)
+        os.replace(temporary_path, TASK_DATABASE_CSV)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def save_tasks_to_csv() -> None:
-    TASK_DATABASE_CSV.parent.mkdir(parents=True, exist_ok=True)
-    with TASK_DATABASE_CSV.open("w", newline="", encoding="utf-8-sig") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=TASK_CSV_FIELDS)
-        writer.writeheader()
-        writer.writerows(task_to_csv_row(task) for task in st.session_state.tasks)
+    write_tasks_to_csv(st.session_state.tasks)
+
+
+def apply_board_edit(event: object) -> None:
+    if not isinstance(event, dict) or not isinstance(event.get("event_id"), str):
+        return
+    event_id = event["event_id"]
+    if st.session_state.get("board_save_result", {}).get("event_id") == event_id:
+        return
+    try:
+        updates = event.get("updates")
+        if not isinstance(updates, dict) or not updates:
+            raise ValueError("No ticket changes were received.")
+        allowed = {"title", "project_id", "project", "owner", "responsible_emails", "status", "due", "description", "attachments"}
+        if set(updates) - allowed:
+            raise ValueError("The ticket contains unsupported changes.")
+        for field, value in updates.items():
+            if field in {"responsible_emails", "attachments"}:
+                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                    raise ValueError(f"Invalid {field} value.")
+            elif not isinstance(value, str):
+                raise ValueError(f"Invalid {field} value.")
+        # Read the latest file so an edit does not overwrite other saved tickets.
+        tasks = load_tasks_from_csv()
+        task = next((task for task in tasks if task.get("id") == event.get("task_id")), None)
+        if task is None:
+            raise ValueError("This ticket no longer exists. Reload the board.")
+        task.update(updates)
+        if not task["title"].strip() or not task["project"].strip():
+            raise ValueError("Task title and project name are required.")
+        if not task["responsible_emails"] or any(not email.strip() for email in task["responsible_emails"]):
+            raise ValueError("Select at least one responsible person.")
+        task["responsible_emails"] = list(dict.fromkeys(task["responsible_emails"]))
+        task["responsible_email"] = ", ".join(task["responsible_emails"])
+        write_tasks_to_csv(tasks)
+        st.session_state.tasks = tasks
+        st.session_state.board_save_result = {"event_id": event_id, "ok": True}
+    except (OSError, ValueError) as error:
+        st.session_state.board_save_result = {
+            "event_id": event_id, "ok": False,
+            "error": f"Ticket was not saved: {error}",
+        }
+
+
+def on_board_change() -> None:
+    apply_board_edit(st.session_state.get("kanban_board"))
 
 
 def task_database_csv_bytes() -> bytes:
@@ -359,6 +431,7 @@ def initialize_state() -> None:
         st.session_state.tasks = load_tasks_from_csv()
 
     for task in st.session_state.tasks:
+        task.setdefault("id", uuid4().hex)
         # Older/default tasks may not include fields added by newer UI features.
         existing_responsible = task.get("responsible_emails", task.get("responsible_email", st.session_state.users[0]))
         if isinstance(existing_responsible, str):
@@ -650,6 +723,7 @@ def add_task(
         return False, "Select at least one responsible person."
 
     task = {
+        "id": uuid4().hex,
         "title": cleaned_title,
         "owner": owner,
         "responsible_emails": responsible_emails,
@@ -828,7 +902,7 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         "project_colors": project_color_payload(),
         "tasks": board_tasks,
     }
-    payload = json.dumps(board_data)
+    payload = json.dumps(board_data).replace("<", "\\u003c")
 
     return f"""
 <!doctype html>
@@ -1413,6 +1487,7 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
 </head>
 <body>
 <p class="hint">Hold a task card and drop it into another status column. Assignee initials appear below the due date. Double-click a task to edit it in a small window.</p>
+<p id="save-error" role="alert" style="color: #b91c1c;"></p>
 <div class="board-wrap">
     <div id="board" class="board"></div>
 </div>
@@ -1466,6 +1541,7 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         </div>
         <div class="modal-actions">
             <button type="button" id="edit-cancel">Cancel</button>
+            <span id="edit-save-error" role="alert" style="color: #b91c1c;"></span>
             <button type="button" id="edit-save" class="primary">Save changes</button>
         </div>
     </div>
@@ -1477,6 +1553,36 @@ const modal = document.getElementById("edit-modal");
 let draggedId = null;
 let editingTaskId = null;
 let editingResponsibleEmails = [];
+let pendingSaveId = null;
+
+function persistTask(task, updates) {{
+    if (pendingSaveId) return;
+    pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
+    document.getElementById("save-error").textContent = "";
+    document.getElementById("edit-save-error").textContent = "";
+    document.getElementById("edit-save").disabled = true;
+    document.getElementById("edit-save").textContent = "Saving…";
+    board.style.pointerEvents = "none";
+    window.parent.postMessage({{
+        type: "planner:save", value: {{event_id: pendingSaveId, task_id: task.id, updates}},
+    }}, "*");
+}}
+
+window.addEventListener("message", event => {{
+    if (event.source !== window.parent || event.data?.type !== "planner:save-result") return;
+    const result = event.data.result;
+    if (!result || result.event_id !== pendingSaveId) return;
+    pendingSaveId = null;
+    board.style.pointerEvents = "";
+    document.getElementById("edit-save").disabled = false;
+    document.getElementById("edit-save").textContent = "Save changes";
+    if (result.ok) {{
+        closeEditModal();
+    }} else {{
+        document.getElementById("save-error").textContent = result.error;
+        document.getElementById("edit-save-error").textContent = result.error;
+    }}
+}});
 
 function cardClass(status) {{
     const lowered = status.toLowerCase();
@@ -1737,7 +1843,11 @@ function taskMeta(task) {{
 }}
 
 function saveTaskMeta(task) {{
-    localStorage.setItem(taskStoreKey(task), JSON.stringify(taskMeta(task)));
+    try {{
+        localStorage.setItem(taskStoreKey(task), JSON.stringify(taskMeta(task)));
+    }} catch (error) {{
+        // Browser metadata is optional; it must not prevent saving the ticket.
+    }}
 }}
 
 function nowLabel() {{
@@ -1940,10 +2050,7 @@ function createDropzone(status) {{
 
         const task = findTask(cardId);
         if (!task) return;
-        task.status = status;
-        updateCardFromTask(card, task);
-        zone.appendChild(card);
-        updateColumnCounts();
+        persistTask(task, {{status}});
     }});
 
     return zone;
@@ -1953,6 +2060,7 @@ function openEditModal(taskId) {{
     const task = findTask(taskId);
     if (!task) return;
     editingTaskId = taskId;
+    document.getElementById("edit-save-error").textContent = "";
 
     document.getElementById("edit-title").value = text(task.title);
     document.getElementById("edit-project-id").value = text(task.project_id);
@@ -1981,14 +2089,17 @@ function closeEditModal() {{
 
 function saveEditedTask() {{
     const task = findTask(editingTaskId);
-    if (!task) return;
+    if (!task || pendingSaveId) return;
+    if (!selectedResponsibleEmails().length) {{
+        document.getElementById("edit-save-error").textContent = "Select at least one responsible person.";
+        return;
+    }}
 
     task.title = document.getElementById("edit-title").value.trim() || task.title;
     task.project_id = document.getElementById("edit-project-id").value.trim() || task.project_id;
     task.project = document.getElementById("edit-project").value.trim() || task.project;
     task.owner = document.getElementById("edit-owner").value;
     task.responsible_emails = selectedResponsibleEmails();
-    if (!task.responsible_emails.length && data.users.length) task.responsible_emails = [data.users[0]];
     task.responsible_email = task.responsible_emails.join(", ");
     task.status = document.getElementById("edit-status").value;
     const previousDue = text(task.due);
@@ -2022,7 +2133,8 @@ function saveEditedTask() {{
         if (targetZone) targetZone.appendChild(card);
     }}
     updateColumnCounts();
-    closeEditModal();
+    const fields = ["title", "project_id", "project", "owner", "responsible_emails", "status", "due", "description", "attachments"];
+    persistTask(task, Object.fromEntries(fields.map(field => [field, task[field]])));
 }}
 
 document.getElementById("responsible-control").addEventListener("click", () => {{
@@ -2304,10 +2416,8 @@ with st.sidebar:
         st.error(message)
 
 filtered_tasks = [
-    # Add a stable DOM id for the embedded board. The id is based on the current
-    # filtered order and is used only inside the browser component.
-    task | {"id": f"task-{index}", "storage_key": f"task-{index}"}
-    for index, task in enumerate(st.session_state.tasks)
+    task | {"storage_key": task["id"]}
+    for task in st.session_state.tasks
     if task["project_id"] in selected_project_ids
     and task["owner"] in selected_people
     and task["status"] in selected_statuses
@@ -2363,7 +2473,14 @@ if st.session_state.get("show_added_task_dialog"):
 visible_statuses = [status for status in statuses if status in selected_statuses]
 visible_people = [person for person in people if person in selected_people]
 board_html = build_board_html(visible_statuses, visible_people, filtered_tasks)
-components.html(board_html, height=board_height(len(visible_people)), scrolling=True)
+kanban_component = components.declare_component(
+    "kanban_board", path=str(Path(__file__).parent / "assets" / "kanban_component"),
+)
+kanban_component(
+    html=board_html, height=board_height(len(visible_people)),
+    save_result=st.session_state.get("board_save_result"),
+    key="kanban_board", default=None, on_change=on_board_change,
+)
 
 
 

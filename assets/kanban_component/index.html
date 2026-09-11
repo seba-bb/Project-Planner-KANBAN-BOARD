@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>html, body { margin: 0; } iframe { display: block; width: 100%; border: 0; }</style>
+</head>
+<body>
+<iframe id="board-frame" title="Project Kanban board" sandbox="allow-scripts allow-same-origin allow-downloads allow-popups"></iframe>
+<script>
+const frame = document.getElementById("board-frame");
+let lastHtml = null;
+let saveResult = null;
+
+function send(type, values = {}) {
+  window.parent.postMessage({isStreamlitMessage: true, type, ...values}, "*");
+}
+
+function acknowledge() {
+  frame.contentWindow.postMessage({type: "planner:save-result", result: saveResult}, "*");
+}
+
+frame.addEventListener("load", acknowledge);
+window.addEventListener("message", event => {
+  if (event.source === frame.contentWindow && event.data?.type === "planner:save") {
+    send("streamlit:setComponentValue", {value: event.data.value, dataType: "json"});
+  } else if (event.source === window.parent && event.data?.type === "streamlit:render") {
+    const args = event.data.args;
+    frame.style.height = `${args.height}px`;
+    send("streamlit:setFrameHeight", {height: args.height});
+    saveResult = args.save_result;
+    if (args.html !== lastHtml) {
+      lastHtml = args.html;
+      frame.srcdoc = args.html;
+    } else {
+      acknowledge();
+    }
+  }
+});
+send("streamlit:componentReady", {apiVersion: 1});
+</script>
+</body>
+</html>
