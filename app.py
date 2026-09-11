@@ -12,7 +12,9 @@ from datetime import date
 from pathlib import Path
 from html import escape
 from io import StringIO
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
+
+from notifications import send_new_task_notification
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -33,6 +35,7 @@ DEFAULT_PROJECT_COLORS = [
 DEFAULT_USERS = ["sebastian.stasica@die-tech.biz"]
 APP_ICON_PATH = Path(__file__).parent / "assets" / "project_planner_icon.png"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 TASK_DATABASE_CSV = Path(__file__).parent / "project_planner_actions.csv"
 BOARD_COLUMNS_JSON = Path(__file__).parent / "board_columns.json"
 BOARD_LABELS_JSON = Path(__file__).parent / "board_labels.json"
@@ -48,6 +51,7 @@ TASK_CSV_FIELDS = [
     "description",
     "attachments",
     "email_notification",
+    "email_notification_status",
     "labels",
 ]
 
@@ -181,6 +185,7 @@ def task_from_csv_row(row: dict[str, str]) -> dict[str, object]:
         "description": row.get("description", "No additional details provided."),
         "attachments": attachments,
         "labels": csv_json_list(row.get("labels", "")),
+        "email_notification_status": row.get("email_notification_status", ""),
         "email_notification": row.get("email_notification", "").strip().lower() in {"1", "true", "yes"},
     }
     return task
@@ -215,6 +220,7 @@ def task_to_csv_row(task: dict[str, object]) -> dict[str, str]:
         "attachments": json.dumps(task.get("attachments", []), ensure_ascii=False),
         "labels": json.dumps(task.get("labels", []), ensure_ascii=False),
         "email_notification": "true" if task.get("email_notification") else "false",
+        "email_notification_status": str(task.get("email_notification_status", "")),
     }
 
 
@@ -279,6 +285,12 @@ def apply_board_edit(event: object) -> None:
         task = next((task for task in tasks if task.get("id") == event.get("task_id")), None)
         if task is None:
             raise ValueError("This ticket no longer exists. Reload the board.")
+        if "attachments" in updates:
+            old_attachments = task.get("attachments", [])
+            updates = updates | {"attachments": list(dict.fromkeys(
+                reference if reference in old_attachments else clean_attachment_link(reference)
+                for reference in updates["attachments"]
+            ))}
         task.update(updates)
         if not task["title"].strip() or not task["project"].strip():
             raise ValueError("Task title and project name are required.")
@@ -291,13 +303,18 @@ def apply_board_edit(event: object) -> None:
             task["labels"] = list(dict.fromkeys(task["labels"]))
             if set(task["labels"]) - {label["id"] for label in labels}:
                 raise ValueError("A selected label no longer exists. Reload the board.")
+        saved_files = save_uploaded_files(task["id"], event.get("uploaded_files", []))
+        task["attachments"] = list(dict.fromkeys(task.get("attachments", []) + saved_files))
         labels_changed = labels != previous_labels
-        if labels_changed:
-            write_board_labels(labels)
+        labels_written = False
         try:
+            if labels_changed:
+                write_board_labels(labels)
+                labels_written = True
             write_tasks_to_csv(tasks)
         except OSError:
-            if labels_changed:
+            cleanup_uploaded_files(saved_files)
+            if labels_written:
                 write_board_labels(previous_labels)
             raise
         st.session_state.tasks = tasks
@@ -465,14 +482,17 @@ def reset_board_filters() -> None:
     st.session_state.filter_keyword = ""
     st.session_state.filter_members = []
     st.session_state.filter_due = "Any date"
-    st.session_state.filter_projects = st.session_state.project_ids.copy()
+    st.session_state.filter_labels = []
     st.session_state.status_filter = st.session_state.statuses.copy()
 
 
 def task_matches_filters(
     task: dict[str, object], keyword: str = "", members: list[str] | None = None,
-    due_filter: str = "Any date", today: date | None = None,
+    due_filter: str = "Any date", today: date | None = None, labels: list[str] | None = None,
 ) -> bool:
+    task_labels = task.get("labels", [])
+    if labels and not (set(task_labels).intersection(labels) or ("__no_labels__" in labels and not task_labels)):
+        return False
     emails = responsible_emails_list(task)
     searchable = " ".join(str(task.get(field, "")) for field in (
         "title", "description", "project", "project_id", "status", "due",
@@ -726,46 +746,106 @@ def unique_file_path(folder: Path, file_name: str) -> Path:
         counter += 1
 
 
+def local_folder_uri(value: str) -> str | None:
+    path = value.strip()
+    if re.match(r"^[A-Za-z]:[\\/]", path):
+        return "file:///" + quote(path.replace("\\", "/"), safe="/:")
+    if path.startswith("\\\\"):
+        return "file://" + quote(path[2:].replace("\\", "/"), safe="/")
+    if path.startswith("/"):
+        return "file://" + quote(path, safe="/")
+    if path.lower().startswith("file://") and urlsplit(path).path:
+        return "file:" + path[5:]
+    return None
+
+
+def clean_attachment_link(value: str) -> str:
+    link = value.strip()
+    if local_folder_uri(link):
+        return link
+    parsed = urlsplit(link)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or any(char.isspace() for char in link):
+        raise ValueError("Enter a web link or an absolute local/shared folder path.")
+    return link
+
+
+def upload_payload(files: list[object]) -> list[dict[str, str]]:
+    return [{"name": file.name, "data": base64.b64encode(file.getvalue()).decode("ascii")} for file in files or []]
+
+
+def cleanup_uploaded_files(references: list[str]) -> None:
+    root = ATTACHMENTS_DIR.resolve()
+    for reference in references:
+        path = (ATTACHMENTS_DIR.parent / reference).resolve()
+        if path.is_relative_to(root):
+            path.unlink(missing_ok=True)
+
+
+def save_uploaded_files(task_id: str, uploads: object) -> list[str]:
+    if not isinstance(uploads, list) or len(uploads) > 50:
+        raise ValueError("Choose up to 50 files per save (20 MB total).")
+    decoded = []
+    total = 0
+    for upload in uploads:
+        if not isinstance(upload, dict) or not isinstance(upload.get("name"), str) or not isinstance(upload.get("data"), str):
+            raise ValueError("Invalid uploaded file.")
+        if not upload["name"].strip() or len(upload["name"]) > 255:
+            raise ValueError("Invalid file name.")
+        if len(upload["data"]) > ((MAX_ATTACHMENT_BYTES + 2) // 3) * 4:
+            raise ValueError("Uploads must total 20 MB or less per save.")
+        try:
+            contents = base64.b64decode(upload["data"], validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise ValueError("The uploaded file could not be read. Select it again.") from error
+        total += len(contents)
+        if total > MAX_ATTACHMENT_BYTES:
+            raise ValueError("Uploads must total 20 MB or less per save.")
+        decoded.append((upload["name"], contents))
+    saved = []
+    try:
+        if decoded:
+            folder = ATTACHMENTS_DIR / safe_storage_name(task_id)
+            folder.mkdir(parents=True, exist_ok=True)
+            for name, contents in decoded:
+                path = unique_file_path(folder, name)
+                # Never overwrite an existing attachment, including same-name uploads.
+                with path.open("xb") as file:
+                    saved.append(str(path.relative_to(ATTACHMENTS_DIR.parent)))
+                    file.write(contents)
+    except OSError:
+        cleanup_uploaded_files(saved)
+        raise
+    return saved
+
+
 def attachment_link_items(attachments: list[str]) -> list[dict[str, str]]:
     items = []
-    app_folder = Path(__file__).parent.resolve()
-
+    root = ATTACHMENTS_DIR.resolve()
     for attachment in attachments:
-        name = Path(attachment).name or attachment
-        href = ""
-
-        if attachment.startswith(("http://", "https://", "mailto:")):
-            href = attachment
-        else:
-            attachment_path = Path(attachment)
-            if not attachment_path.is_absolute():
-                attachment_path = app_folder / attachment_path
-            attachment_path = attachment_path.resolve()
-
+        item = {"reference": attachment, "name": Path(attachment).name or attachment, "href": ""}
+        if attachment.lower().startswith(("http://", "https://")):
             try:
-                attachment_path.relative_to(app_folder)
+                item.update(name=attachment, href=clean_attachment_link(attachment), kind="link")
             except ValueError:
-                attachment_path = None
-
-            if attachment_path and not attachment_path.is_file() and ATTACHMENTS_DIR.exists():
-                safe_name = safe_storage_name(name)
-                attachment_path = next(
-                    (
-                        saved_path
-                        for saved_path in ATTACHMENTS_DIR.rglob("*")
-                        if saved_path.is_file() and saved_path.name in {name, safe_name}
-                    ),
-                    None,
-                )
-
-            if attachment_path and attachment_path.is_file():
-                mime_type = mimetypes.guess_type(attachment_path.name)[0] or "application/octet-stream"
-                encoded_file = base64.b64encode(attachment_path.read_bytes()).decode("ascii")
-                href = f"data:{mime_type};base64,{encoded_file}"
-
-        items.append({"name": name, "href": href})
-
+                pass
+        else:
+            path = (ATTACHMENTS_DIR.parent / attachment).resolve()
+            # Only expose uploaded files, never arbitrary application/server files.
+            if path.is_relative_to(root) and path.is_file():
+                mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                safe_preview = mime in {"application/pdf", "text/plain", "image/png", "image/jpeg", "image/gif", "image/webp"}
+                if not safe_preview:
+                    mime = "application/octet-stream"
+                try:
+                    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                    item.update(href=f"data:{mime};base64,{encoded}", kind="file", preview=safe_preview)
+                except OSError:
+                    pass
+        if not item["href"] and (folder_uri := local_folder_uri(attachment)):
+            item.update(name=attachment, href=folder_uri, kind="folder", reference=attachment)
+        items.append(item)
     return items
+
 
 def rename_values(
     state_key: str,
@@ -890,38 +970,17 @@ def add_attachments_to_task(
     if task_index < 0 or task_index >= len(st.session_state.tasks):
         return False, "Select an existing task."
 
-    uploaded_files = uploaded_files or []
     task = st.session_state.tasks[task_index]
-    typed_names = [name.strip() for name in typed_attachment_names.splitlines() if name.strip()]
-
-    if not uploaded_files and not typed_names:
-        return False, "Choose at least one file or enter one file link."
-
-    task_folder = ATTACHMENTS_DIR / safe_storage_name(
-        f"{task_index + 1}_{task['project_id']}_{task['title']}"
-    )
-    task_folder.mkdir(parents=True, exist_ok=True)
-
-    saved_file_names = []
-    for uploaded_file in uploaded_files:
-        target_path = unique_file_path(task_folder, uploaded_file.name)
-        target_path.write_bytes(uploaded_file.getbuffer())
-        saved_file_names.append(str(target_path.relative_to(Path(__file__).parent)))
-
-    candidate_names = saved_file_names + typed_names
-    existing_names = task.setdefault("attachments", [])
-    added_names = []
-
-    for name in candidate_names:
-        if name not in existing_names:
-            existing_names.append(name)
-            added_names.append(name)
-
-    if not added_names:
-        return False, "These files are already attached to the selected task."
-
-    save_tasks_to_csv()
-    return True, f"Added {len(added_names)} file(s) to: {task['title']}."
+    links = [line.strip() for line in typed_attachment_names.splitlines() if line.strip()]
+    if not uploaded_files and not links:
+        return False, "Choose a file or enter a link."
+    apply_board_edit({
+        "event_id": uuid4().hex, "task_id": task["id"],
+        "updates": {"attachments": task.get("attachments", []) + links},
+        "uploaded_files": upload_payload(uploaded_files),
+    })
+    result = st.session_state.board_save_result
+    return result["ok"], "Files and links added." if result["ok"] else result["error"]
 
 
 def task_option_label(task: dict[str, object]) -> str:
@@ -936,7 +995,7 @@ def add_task(
     due: str,
     description: str,
     attachments: list[str],
-    send_email: bool,
+    uploaded_files: list[dict] | None = None,
 ) -> tuple[bool, str]:
     # Normalize user input at the boundary so downstream rendering can assume
     # required fields are present and human-readable.
@@ -967,11 +1026,33 @@ def add_task(
         "project": cleaned_project,
         "description": cleaned_description or "No additional details provided.",
         "attachments": attachments,
-        "email_notification": send_email,
+        "email_notification": False,
+        "email_notification_status": "pending",
     }
-    st.session_state.tasks.append(task)
+    saved_files = []
+    try:
+        task["attachments"] = [clean_attachment_link(link) for link in attachments]
+        saved_files = save_uploaded_files(task["id"], uploaded_files or [])
+        task["attachments"].extend(saved_files)
+        tasks = [*st.session_state.tasks, task]
+        write_tasks_to_csv(tasks)
+    except (OSError, ValueError) as error:
+        cleanup_uploaded_files(saved_files)
+        return False, f"Task was not saved: {error}"
+    st.session_state.tasks = tasks
+    notification = send_new_task_notification(task)
+    task["email_notification"] = notification["status"] == "sent"
+    task["email_notification_status"] = notification["status"]
+    try:
+        latest_tasks = load_tasks_from_csv()
+        saved_task = next(item for item in latest_tasks if item["id"] == task["id"])
+        saved_task.update(email_notification=task["email_notification"], email_notification_status=task["email_notification_status"])
+        write_tasks_to_csv(latest_tasks)
+        st.session_state.tasks = latest_tasks
+    except (OSError, StopIteration):
+        notification = notification | {"message": notification["message"] + " The notification status could not be saved."}
+    st.session_state.last_notification_result = notification
     st.session_state.last_added_task = task.copy()
-    save_tasks_to_csv()
     return True, f"Added task: {cleaned_title}."
 
 
@@ -995,8 +1076,8 @@ def add_task_dialog(
         )
         task_due = st.date_input("Due date")
         task_description = st.text_area("Details", placeholder="Additional task information")
-        uploaded_files = st.file_uploader("Attach files", accept_multiple_files=True)
-        send_email = st.checkbox("Send email to responsible people")
+        task_link = st.text_input("Add link", placeholder="https://…")
+        uploaded_files = st.file_uploader("Upload file", accept_multiple_files=True, help="20 MB total per save.")
         submitted = st.form_submit_button("Add task")
 
     if submitted:
@@ -1008,8 +1089,8 @@ def add_task_dialog(
             task_status,
             task_due.isoformat(),
             task_description,
-            [file.name for file in uploaded_files],
-            send_email,
+            [task_link.strip()] if task_link.strip() else [],
+            uploaded_files=upload_payload(uploaded_files),
         )
         if success:
             st.session_state.show_added_task_dialog = True
@@ -1025,16 +1106,22 @@ def attach_files_dialog() -> None:
         format_func=lambda index: task_option_label(st.session_state.tasks[index]),
     )
     current_attachments = st.session_state.tasks[selected_task_index].get("attachments", [])
-    current_attachment_text = ", ".join(current_attachments) or "No files attached"
-    st.caption(f"Current files: {current_attachment_text}")
+    for index, item in enumerate(attachment_link_items(current_attachments)):
+        if item.get("kind") == "link":
+            st.link_button(item["name"], item["href"])
+        elif item["href"]:
+            mime, encoded = item["href"].split(";base64,", 1)
+            st.download_button(item["name"], base64.b64decode(encoded), file_name=item["name"], mime=mime[5:], key=f"attachment_download_{selected_task_index}_{index}")
+        else:
+            st.caption(f"{item['name']} — file unavailable; upload it again.")
     uploaded_files = st.file_uploader(
-        "Add files",
+        "Upload file",
         accept_multiple_files=True,
         key="dialog_existing_task_files",
     )
     typed_attachment_names = st.text_area(
-        "File paths or links",
-        placeholder="Paste one file path or SharePoint link per line",
+        "Add link",
+        placeholder="One https:// link per line",
         key="dialog_attachment_links",
     )
 
@@ -1099,17 +1186,11 @@ def task_added_dialog() -> None:
         attachment_names = ", ".join(task.get("attachments", [])) or "No files attached"
         st.markdown(f"**Details:** {escape(task['description'])}")
         st.markdown(f"**Attachments:** {escape(attachment_names)}")
-        if task.get("email_notification"):
-            subject = quote(f"New task assigned: {task['title']}")
-            body = quote(
-                f"Task: {task['title']}\n"
-                f"Project ID: {task['project_id']}\n"
-                f"Project: {task['project']}\n"
-                f"Due date: {task['due']}\n"
-                f"Details: {task['description']}"
-            )
-            recipients = quote(",".join(responsible_emails_list(task)), safe=",@.")
-            st.markdown(f"[Open email draft](mailto:{recipients}?subject={subject}&body={body})")
+        notification = st.session_state.get("last_notification_result", {})
+        if notification.get("status") == "sent":
+            st.success(notification["message"])
+        elif notification:
+            st.warning(notification["message"])
 
     if st.button("Close", key="close_added_task_dialog"):
         st.session_state.show_added_task_dialog = False
@@ -1456,6 +1537,12 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
         font-size: 12px;
         margin: 0 0 10px;
     }}
+    .attachment-actions {{ display: flex; gap: 8px; margin: 6px 0; }}
+    .attachment-actions button, #attachment-link-apply {{ border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #334155; padding: 6px 10px; cursor: pointer; }}
+    .attachment-row {{ display: flex; align-items: center; gap: 10px; padding: 5px 0; }}
+    .attachment-row > :first-child {{ flex: 1; min-width: 0; }}
+    .attachment-remove {{ border: 0; background: none; color: #64748b; cursor: pointer; }}
+    #attachment-error {{ color: #b91c1c; font-size: 12px; }}
     .attachment-list {{
         display: grid;
         gap: 3px;
@@ -1932,10 +2019,21 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
                     </div>
                     <label>Column/status<select id="edit-status"></select></label>
                     <label>Due date<input id="edit-due" type="date"></label>
-                    <label>Attached files<textarea id="edit-attachments" placeholder="One file name or link per line"></textarea></label>
-                    <div id="edit-attachment-links" class="attachment-list"></div>
-                    <div class="modal-note">Saved files and links can be opened from this list.</div>
-                    <label>Upload files<input id="edit-uploaded-files" type="file" multiple></label>
+                    <div class="attachment-section">
+                        <div class="field-label">Files and links</div>
+                        <div class="attachment-actions">
+                            <button id="attachment-add-link" type="button">Add link</button>
+                            <button id="attachment-upload" type="button">Upload file</button>
+                            <input id="edit-uploaded-files" type="file" multiple hidden aria-label="Upload file">
+                        </div>
+                        <div id="attachment-link-form" hidden>
+                            <label>Link or folder path<input id="attachment-link-input" type="text" placeholder="https://… or C:\\Program Files"></label>
+                            <button id="attachment-link-apply" type="button">Add</button>
+                        </div>
+                        <div id="attachment-error" role="alert"></div>
+                        <div id="edit-attachment-links" class="attachment-list"></div>
+                        <div class="modal-note">Save changes to attach added links and files. Local folders: use Copy path if your browser blocks opening. Uploads: 20 MB total per save.</div>
+                    </div>
                 </div>
                 <section class="task-list-section" aria-label="Task list">
                     <div class="section-title">Task list</div>
@@ -2110,7 +2208,7 @@ document.addEventListener("click", event => {{
     if (!document.getElementById("task-label-section").contains(event.target)) setLabelsOpen(false);
 }});
 
-function persistTask(task, updates, labelChanges = []) {{
+function persistTask(task, updates, labelChanges = [], uploadedFiles = []) {{
     if (pendingSaveId) return;
     pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
     document.getElementById("save-error").textContent = "";
@@ -2119,7 +2217,7 @@ function persistTask(task, updates, labelChanges = []) {{
     document.getElementById("edit-save").textContent = "Saving…";
     board.style.pointerEvents = "none";
     window.parent.postMessage({{
-        type: "planner:save", value: {{event_id: pendingSaveId, task_id: task.id, updates, label_changes: labelChanges}},
+        type: "planner:save", value: {{event_id: pendingSaveId, task_id: task.id, updates, label_changes: labelChanges, uploaded_files: uploadedFiles}},
     }}, "*");
 }}
 
@@ -2572,36 +2670,190 @@ function createColumnHeader(status) {{
     return header;
 }}
 
-function renderAttachmentLinks(container, task) {{
-    container.innerHTML = "";
+let editingAttachments = [];
+let editingUploads = [];
+let attachmentReadPending = false;
+let attachmentSession = 0;
+
+function renderAttachmentLinks(container, task, removeItem = null) {{
+    (container.attachmentUrls || []).forEach(url => URL.revokeObjectURL(url));
+    container.attachmentUrls = [];
+    container.replaceChildren();
     const links = task.attachment_links || [];
     if (!links.length) {{
         const empty = document.createElement("span");
-        empty.textContent = "No files attached";
+        empty.textContent = "No files or links attached";
         container.appendChild(empty);
         return;
     }}
-
-    links.forEach(item => {{
-        if (item.href) {{
+    links.forEach((item, index) => {{
+        const row = document.createElement("div");
+        row.className = "attachment-row";
+        let href = item.href || "";
+        const file = href.startsWith("data:");
+        if (file) {{
+            const [header, encoded] = href.split(",", 2);
+            const mime = header.slice(5).split(";")[0];
+            const bytes = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
+            href = URL.createObjectURL(new Blob([bytes], {{type: mime}}));
+            container.attachmentUrls.push(href);
+        }}
+        if (href && (file || item.kind === "folder" || /^https?:\\/\\//i.test(href))) {{
             const link = document.createElement("a");
-            link.href = item.href;
+            link.href = href;
             link.textContent = item.name;
             link.target = "_blank";
-            link.rel = "noopener";
-            if (item.href.startsWith("data:")) link.download = item.name;
-            container.appendChild(link);
+            link.rel = "noopener noreferrer";
+            if (file) {{
+                link.download = item.name;
+                link.title = `Download ${{item.name}}`;
+            }}
+            row.appendChild(link);
+            if (item.kind === "folder") {{
+                link.title = "Open folder (your browser may block local links)";
+                const copy = document.createElement("button");
+                copy.type = "button";
+                copy.className = "attachment-remove";
+                copy.textContent = "Copy path";
+                copy.addEventListener("click", async () => {{
+                    try {{
+                        const path = item.reference || item.name;
+                        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(path);
+                        else {{
+                            const input = document.createElement("textarea");
+                            input.value = path;
+                            row.appendChild(input);
+                            input.select();
+                            const copied = document.execCommand("copy");
+                            input.remove();
+                            if (!copied) throw new Error();
+                        }}
+                        copy.textContent = "Copied";
+                    }} catch (_) {{
+                        copy.textContent = "Select and copy the path";
+                    }}
+                }});
+                row.appendChild(copy);
+            }}
+            if (file && item.preview) {{
+                const open = document.createElement("a");
+                open.href = href;
+                open.textContent = "Open";
+                open.target = "_blank";
+                open.rel = "noopener noreferrer";
+                open.setAttribute("aria-label", `Open ${{item.name}}`);
+                row.appendChild(open);
+            }}
         }} else {{
             const name = document.createElement("span");
-            name.textContent = item.name;
-            container.appendChild(name);
+            name.textContent = `${{item.name}} — unavailable; upload the file again`;
+            row.appendChild(name);
         }}
+        if (removeItem) {{
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "attachment-remove";
+            remove.textContent = "×";
+            remove.setAttribute("aria-label", `Remove ${{item.name}}`);
+            remove.addEventListener("click", () => removeItem(index));
+            row.appendChild(remove);
+        }}
+        // Attachment interactions must not drag the card or open the task editor.
+        row.addEventListener("dblclick", event => event.stopPropagation());
+        row.addEventListener("dragstart", event => {{ event.preventDefault(); event.stopPropagation(); }});
+        container.appendChild(row);
     }});
 }}
-
-function updateTaskAttachmentLinks(task) {{
-    task.attachment_links = (task.attachments || []).map(name => ({{ name, href: "" }}));
+function renderEditingAttachments() {{
+    const all = [...editingAttachments, ...editingUploads];
+    renderAttachmentLinks(document.getElementById("edit-attachment-links"), {{attachment_links: all}}, index => {{
+        if (index < editingAttachments.length) editingAttachments.splice(index, 1);
+        else editingUploads.splice(index - editingAttachments.length, 1);
+        renderEditingAttachments();
+    }});
 }}
+function folderUri(value) {{
+    if (/^[a-z]:[\\\\/]/i.test(value)) return "file:///" + encodeURI(value.replace(/\\\\/g, "/")).replace(/#/g, "%23").replace(/\\?/g, "%3F");
+    if (value.startsWith("\\\\\\\\")) return "file://" + encodeURI(value.slice(2).replace(/\\\\/g, "/")).replace(/#/g, "%23").replace(/\\?/g, "%3F");
+    if (value.startsWith("/")) return "file://" + encodeURI(value).replace(/#/g, "%23").replace(/\\?/g, "%3F");
+    if (/^file:\\/\\//i.test(value)) return value;
+    return null;
+}}
+function addAttachmentLink() {{
+    const input = document.getElementById("attachment-link-input");
+    const value = input.value.trim();
+    const error = document.getElementById("attachment-error");
+    const folder = folderUri(value);
+    try {{
+        if (!folder) {{
+            const parsed = new URL(value);
+            if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || /\\s/.test(value)) throw new Error();
+        }}
+    }} catch (_) {{
+        error.textContent = "Enter a web link or an absolute local/shared folder path.";
+        return false;
+    }}
+    if (!editingAttachments.some(item => item.reference === value)) editingAttachments.push({{reference: value, name: value, href: folder || value, kind: folder ? "folder" : "link"}});
+    error.textContent = "";
+    input.value = "";
+    document.getElementById("attachment-link-form").hidden = true;
+    renderEditingAttachments();
+    return true;
+}}
+function readUpload(file) {{
+    return new Promise((resolve, reject) => {{
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error(`Could not read ${{file.name}}. Select it again.`));
+        reader.onabort = () => reject(new Error("File reading was cancelled."));
+        reader.onload = () => {{
+            const data = reader.result.split(",", 2)[1];
+            const preview = ["application/pdf", "text/plain", "image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type);
+            const mime = preview ? file.type : "application/octet-stream";
+            resolve({{name: file.name, data, size: file.size, preview, href: `data:${{mime}};base64,${{data}}`, kind: "file"}});
+        }};
+        reader.readAsDataURL(file);
+    }});
+}}
+document.getElementById("attachment-add-link").addEventListener("click", () => {{
+    document.getElementById("attachment-link-form").hidden = false;
+    document.getElementById("attachment-link-input").focus();
+}});
+document.getElementById("attachment-link-apply").addEventListener("click", addAttachmentLink);
+document.getElementById("attachment-link-input").addEventListener("keydown", event => {{
+    if (event.key === "Enter") {{ event.preventDefault(); addAttachmentLink(); }}
+}});
+document.getElementById("attachment-upload").addEventListener("click", () => document.getElementById("edit-uploaded-files").click());
+document.getElementById("edit-uploaded-files").addEventListener("change", async event => {{
+    const files = Array.from(event.target.files);
+    const session = attachmentSession;
+    const error = document.getElementById("attachment-error");
+    error.textContent = "";
+    if (files.length + editingUploads.length > 50 || [...files, ...editingUploads].reduce((sum, file) => sum + file.size, 0) > 20 * 1024 * 1024) {{
+        error.textContent = "Choose up to 50 files, totaling 20 MB or less per save.";
+        event.target.value = "";
+        return;
+    }}
+    attachmentReadPending = true;
+    document.getElementById("edit-save").disabled = true;
+    document.getElementById("attachment-upload").disabled = true;
+    error.textContent = "Reading files…";
+    try {{
+        const uploads = await Promise.all(files.map(readUpload));
+        if (session !== attachmentSession) return;
+        editingUploads.push(...uploads);
+        error.textContent = "";
+        renderEditingAttachments();
+    }} catch (failure) {{
+        if (session === attachmentSession) error.textContent = failure.message;
+    }} finally {{
+        if (session === attachmentSession) {{
+            attachmentReadPending = false;
+            document.getElementById("edit-save").disabled = Boolean(pendingSaveId);
+            document.getElementById("attachment-upload").disabled = false;
+            event.target.value = "";
+        }}
+    }}
+}});
 
 function taskStoreKey(task) {{
     return `ewm-task-meta:${{task.storage_key || task.id}}`;
@@ -2792,7 +3044,7 @@ function updateCardFromTask(card, task) {{
     card.querySelector(".responsible-email").textContent = responsibleEmailsText(task) || "No responsible person selected";
     card.querySelector(".status").textContent = text(task.status);
     card.querySelector(".description").textContent = text(task.description);
-    card.querySelector(".attachments").textContent = task.attachments && task.attachments.length ? task.attachments.join(", ") : "No files attached";
+    renderAttachmentLinks(card.querySelector(".attachments"), task);
 }}
 
 function createTaskCard(task) {{
@@ -2812,7 +3064,7 @@ function createTaskCard(task) {{
                 <strong>Responsible:</strong> <span class="responsible-email"></span><br>
                 <strong>Status:</strong> <span class="status"></span><br>
                 <strong>Description:</strong> <span class="description"></span><br>
-                <strong>Attachments:</strong> <span class="attachments attachment-list"></span>
+                <strong>Files and links:</strong> <div class="attachments attachment-list"></div>
             </div>
         </details>
         <div class="task-summary">
@@ -2878,8 +3130,16 @@ function openEditModal(taskId) {{
     fillSelect(document.getElementById("edit-status"), data.statuses, task.status);
     document.getElementById("edit-due").value = text(task.due);
     document.getElementById("edit-description").value = text(task.description);
-    document.getElementById("edit-attachments").value = task.attachments && task.attachments.length ? task.attachments.join("\\n") : "";
-    renderAttachmentLinks(document.getElementById("edit-attachment-links"), task);
+    attachmentSession += 1;
+    attachmentReadPending = false;
+    editingAttachments = (task.attachment_links || []).map(item => ({{...item}}));
+    editingUploads = [];
+    document.getElementById("edit-save").disabled = Boolean(pendingSaveId);
+    document.getElementById("attachment-upload").disabled = false;
+    document.getElementById("attachment-link-input").value = "";
+    document.getElementById("attachment-link-form").hidden = true;
+    document.getElementById("attachment-error").textContent = "";
+    renderEditingAttachments();
     document.getElementById("edit-uploaded-files").value = "";
     document.getElementById("checklist-new-item").value = "";
     document.getElementById("comment-input").value = "";
@@ -2890,6 +3150,7 @@ function openEditModal(taskId) {{
 }}
 
 function closeEditModal() {{
+    attachmentSession += 1;
     editingTaskId = null;
     setLabelsOpen(false);
     modal.classList.remove("open");
@@ -2898,7 +3159,8 @@ function closeEditModal() {{
 
 function saveEditedTask() {{
     const task = findTask(editingTaskId);
-    if (!task || pendingSaveId) return;
+    if (!task || pendingSaveId || attachmentReadPending) return;
+    if (document.getElementById("attachment-link-input").value.trim() && !addAttachmentLink()) return;
     if (!selectedResponsibleEmails().length) {{
         document.getElementById("edit-save-error").textContent = "Select at least one responsible person.";
         return;
@@ -2921,15 +3183,6 @@ function saveEditedTask() {{
         task.due = nextDue;
     }}
     task.description = document.getElementById("edit-description").value.trim() || "No additional details provided.";
-    const typedAttachments = document.getElementById("edit-attachments").value
-        .split("\\n")
-        .map(value => value.trim())
-        .filter(Boolean);
-    const uploadedAttachmentNames = Array.from(document.getElementById("edit-uploaded-files").files)
-        .map(file => file.name);
-    task.attachments = Array.from(new Set([...typedAttachments, ...uploadedAttachmentNames]));
-    updateTaskAttachmentLinks(task);
-    renderAttachmentLinks(document.getElementById("edit-attachment-links"), task);
     addActivity(task, "updated this task");
 
     const card = document.getElementById(task.id);
@@ -2940,7 +3193,7 @@ function saveEditedTask() {{
     }}
     updateColumnCounts();
     const fields = ["title", "responsible_emails", "status", "due", "description", "attachments", "labels"];
-    persistTask(task, Object.fromEntries(fields.map(field => [field, field === "labels" ? [...editingLabelIds] : task[field]])), Object.values(editingLabelChanges));
+    persistTask(task, Object.fromEntries(fields.map(field => [field, field === "labels" ? [...editingLabelIds] : field === "attachments" ? editingAttachments.map(item => item.reference) : task[field]])), Object.values(editingLabelChanges), editingUploads.map(file => ({{name: file.name, data: file.data}})));
 }}
 
 document.getElementById("responsible-control").addEventListener("click", () => {{
@@ -3054,9 +3307,6 @@ for project_id in project_ids:
 users = st.session_state.users
 
 toolbar_actions, toolbar_filters = st.columns([6, 1])
-with toolbar_actions:
-    if st.button("Attach files"):
-        attach_files_dialog()
 with toolbar_filters:
     with st.popover("Filter", icon=":material/filter_list:", width="stretch"):
         st.markdown("**Filter**")
@@ -3067,15 +3317,19 @@ with toolbar_filters:
             "Any date", "No date", "Overdue", "Due today", "Due in the next day",
             "Due in the next week", "Due in the next month",
         ], key="filter_due")
-        selected_project_ids = st.multiselect("Projects", project_ids, default=project_ids, key="filter_projects")
+        label_names = {label["id"]: label["name"] for label in load_board_labels()}
+        selected_labels = st.multiselect(
+            "Labels", ["__no_labels__", *label_names], key="filter_labels",
+            format_func=lambda label_id: "No labels" if label_id == "__no_labels__" else label_names[label_id],
+            placeholder="Any label",
+        )
         st.button("Clear filters", on_click=reset_board_filters, width="stretch")
 
 filtered_tasks = [
     task | {"storage_key": task["id"]}
     for task in st.session_state.tasks
-    if task["project_id"] in selected_project_ids
-    and task["status"] in selected_statuses
-    and task_matches_filters(task, filter_keyword, filter_members, filter_due)
+    if task["status"] in selected_statuses
+    and task_matches_filters(task, filter_keyword, filter_members, filter_due, labels=selected_labels)
 ]
 
 todo_tasks = [

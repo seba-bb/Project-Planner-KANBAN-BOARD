@@ -39,13 +39,21 @@ Cards show the task title, labels directly underneath, and then Details. Project
 - Responsible people.
 - Status and due date.
 - Description.
-- Attached files, file paths, and document links.
+- Uploaded files, local/shared folder paths, and document links.
 
 ### Task Labels
 
 Open a task and click **Labels** below its title; the Details field follows the labels. Search the shared label list and check one or more labels, or choose **Create a new label**, enter a name, select a color, and click **Apply label**. Use the pencil beside a label to edit its name or color. **Save changes** saves the ticket’s selections and label edits; **Cancel** discards them. Editing a shared label updates its appearance on every ticket using it.
 
 Selected labels appear directly below the title and above Details on cards. Uncheck a label to remove it from a ticket; it stays available for other tickets. Project assignments remain stored, but Project ID badges and project fields are not shown in task details.
+
+### Files, Links, and Folders
+
+Inside a task, use **Add link** for an HTTP/HTTPS address or an absolute folder path such as `C:\Program Files`, `\\server\share`, or `/srv/shared`. Use **Upload file** to select files from your computer (up to 50 files and 20 MB total per save). Click **Save changes** to persist additions or removals. The new-task form also saves actual uploaded file contents.
+
+The single list shows clickable web links and file downloads. PDFs, supported images, and text files also have an **Open** preview link. Local folders have a folder link and **Copy path**: browsers may block `file://` navigation from a web page, so paste the copied path into your file manager when needed. Folder paths refer to the viewer’s computer or network; they do not upload a folder to the server.
+
+Old entries that contain only a filename without a saved file are marked unavailable and need to be uploaded again. Removing an attachment from a ticket removes its reference; the stored file is retained on disk.
 
 ### Using the Board
 
@@ -54,7 +62,7 @@ Selected labels appear directly below the title and above Details on cards. Unch
 3. Move a card to In Progress when work starts.
 4. Update task details and attach supporting documents as needed.
 5. Move finished tasks to Completed, or declined tasks to Rejected.
-6. Open **Filter** above the board to focus on relevant tasks; filters across categories are combined.
+6. Open **Filter** above the board to focus on relevant tasks; filters across categories are combined. **Labels** matches any selected label, and **No labels** finds unlabelled tickets.
 
 ## Current Features
 
@@ -63,10 +71,9 @@ Selected labels appear directly below the title and above Details on cards. Unch
 - Shared colored labels with search, multiple selections, and inline creation and editing.
 - Due dates highlighted yellow from today through the next five days, and red when overdue, using the viewer’s local date.
 - Configurable status columns.
-- Project-based task filtering.
 - Assignment of multiple responsible people to a task, with new email addresses added directly in the responsible-person selector.
-- Task attachments and document links.
-- A top **Filter** button opens keyword, member, status, due-date, and project filters. **Clear filters** restores the full board. Due-date filters use the application server’s calendar date.
+- A single clickable file/link list with **Add link**, **Upload file**, and removal controls inside each ticket.
+- A top **Filter** button opens keyword, member, status, due-date, and label filters. **Clear filters** restores the full board. Due-date filters use the application server’s calendar date.
 - Statistics below the board for visible tasks, projects, To Do tasks, and columns.
 - Local CSV task storage.
 - Full-width board without a left sidebar; column controls are available directly in the board headers.
@@ -77,9 +84,17 @@ Selected labels appear directly below the title and above Details on cards. Unch
 - **Task storage:** `project_planner_actions.csv` in the application directory.
 - **Column configuration:** `board_columns.json` in the application directory; include this file alongside the CSV when backing up the board.
 - **Labels:** `board_labels.json` stores shared label names and colors; the task CSV stores selected label IDs. Include both files in backups.
-- **Attachments:** Local files and references to file paths or document links.
+- **Attachments:** File contents are stored in `attachments/<ticket-id>/`; the CSV stores their relative paths alongside web links and folder references. Include the attachments directory in backups.
 
 The application starts with sample tasks when no CSV task database exists. Saving a ticket writes its assignments and edited fields to the CSV; dragging a card saves its status. Saved changes survive page reloads. Existing CSV files receive stable ticket IDs automatically.
+
+## Email Notifications
+
+New tasks automatically notify all responsible email addresses after the ticket is saved. The confirmation dialog reports whether the SMTP server accepted the message, rejected recipients, or could not send it. Mail-server acceptance does not guarantee inbox delivery. Task creation still succeeds if sending fails; notifications are not automatically retried on reload. The CSV records the notification status.
+
+Copy [the SMTP example](.streamlit/secrets.toml.example) to `.streamlit/secrets.toml`, then enter your SMTP host, port, sender address, encryption mode, and credentials if your server requires login. The real secrets file is ignored by Git. `starttls` is the default; `ssl` and an explicitly configured `none` mode for a trusted relay are also supported. `app_url` adds a link to your board in the notification.
+
+Alternatively, configure `PP_SMTP_HOST`, `PP_SMTP_PORT`, `PP_SMTP_FROM_EMAIL`, `PP_SMTP_SECURITY`, `PP_SMTP_USERNAME`, `PP_SMTP_PASSWORD`, and `PP_SMTP_APP_URL` in the server environment. Environment variables override the secrets file. Without a configured host and sender, the app saves the ticket and displays that email was not sent.
 
 ## Configuration Inventory
 
@@ -103,6 +118,6 @@ If setting up a new checkout without an existing virtual environment, create one
 - Persistent task history, comments, and checklists.
 - Dedicated views for personal tasks, overdue work, and blocked tasks.
 - User authentication and permissions.
-- Email notifications and project reports.
+- Project reports and notification retry management.
 - Kanban metrics such as work in progress, throughput, and cycle time.
 - ERP, Outlook, and Microsoft Teams integration.

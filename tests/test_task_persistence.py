@@ -1,5 +1,8 @@
 """Exercise the app's CSV save boundary without starting its Streamlit UI."""
 import ast
+import base64
+import mimetypes
+from urllib.parse import urlsplit, quote
 import copy
 import csv
 import json
@@ -25,6 +28,9 @@ class TaskPersistenceTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.state = State()
         self.namespace = dict(
+            base64=base64, mimetypes=mimetypes, urlsplit=urlsplit, quote=quote,
+            send_new_task_notification=lambda task: {"status": "sent", "message": "Accepted by test mail server"},
+            ATTACHMENTS_DIR=Path(self.directory.name) / "attachments",
             csv=csv, json=json, os=os, re=re, tempfile=tempfile, Path=Path, uuid4=uuid4, date=date,
             st=SimpleNamespace(session_state=self.state),
             TASK_DATABASE_CSV=Path(self.directory.name) / 'tasks.csv',
@@ -34,6 +40,8 @@ class TaskPersistenceTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1] / 'app.py'
         tree = ast.parse(source.read_text(encoding='utf-8-sig'))
         functions = {
+            'save_uploaded_files', 'cleanup_uploaded_files', 'safe_storage_name', 'unique_file_path',
+            'clean_attachment_link', 'local_folder_uri', 'upload_payload', 'attachment_link_items', 'add_task',
             'merge_board_labels', 'load_board_labels', 'write_board_labels',
             'csv_json_list', 'task_from_csv_row', 'task_to_csv_row',
             'responsible_emails_list', 'load_tasks_from_csv',
@@ -43,7 +51,7 @@ class TaskPersistenceTests(unittest.TestCase):
             'apply_column_rename', 'rename_values', 'add_value',
             'move_board_column', 'apply_column_action', 'task_matches_filters', 'reset_board_filters',
         }
-        constants = {'TASK_CSV_FIELDS', 'DEFAULT_STATUSES', 'DEFAULT_PROJECT_IDS'}
+        constants = {'MAX_ATTACHMENT_BYTES', 'TASK_CSV_FIELDS', 'DEFAULT_STATUSES', 'DEFAULT_PROJECT_IDS'}
         nodes = [node for node in tree.body if
                  (isinstance(node, ast.FunctionDef) and node.name in functions) or
                  (isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in constants for t in node.targets))]
@@ -311,18 +319,136 @@ class TaskPersistenceTests(unittest.TestCase):
         self.assertFalse(self.state.board_save_result['ok'])
         self.assertEqual(self.namespace['load_board_labels'](), previous)
 
+    def test_uploaded_file_bytes_and_link_survive_reload(self):
+        contents = b'Hello file!\x00\xff'
+        event = dict(event_id='upload', task_id='ticket-a',
+                     updates={'attachments': ['https://example.com/spec?version=2']},
+                     uploaded_files=[{'name': 'spec.txt', 'data': base64.b64encode(contents).decode()}])
+        self.namespace['apply_board_edit'](event)
+        self.assertTrue(self.state.board_save_result['ok'])
+        attachments = self.namespace['load_tasks_from_csv']()[0]['attachments']
+        self.assertEqual(attachments[0], 'https://example.com/spec?version=2')
+        self.assertEqual((Path(self.directory.name) / attachments[1]).read_bytes(), contents)
+        items = self.namespace['attachment_link_items'](attachments)
+        self.assertEqual(items[0]['href'], attachments[0])
+        self.assertEqual(items[1]['name'], 'spec.txt')
+        self.assertEqual(base64.b64decode(items[1]['href'].split(',', 1)[1]), contents)
+        self.assertTrue(items[1]['preview'])
+        self.namespace['apply_board_edit'](event)
+        self.assertEqual(len(list(self.namespace['ATTACHMENTS_DIR'].rglob('*.txt'))), 1)
+
+    def test_same_name_uploads_do_not_overwrite_and_names_stay_in_storage(self):
+        upload = lambda name, data: dict(name=name, data=base64.b64encode(data).decode())
+        references = self.namespace['save_uploaded_files']('ticket-a', [
+            upload('report.txt', b'first'), upload('report.txt', b'second'), upload('../../outside.txt', b'third')])
+        self.assertEqual(len(set(references)), 3)
+        root = self.namespace['ATTACHMENTS_DIR'].resolve()
+        for reference, expected in zip(references, [b'first', b'second', b'third']):
+            path = (Path(self.directory.name) / reference).resolve()
+            self.assertTrue(path.is_relative_to(root))
+            self.assertEqual(path.read_bytes(), expected)
+
+    def test_invalid_upload_or_local_link_does_not_change_ticket(self):
+        before = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        for index, (updates, uploads) in enumerate([
+            ({'attachments': ['javascript:alert(1)']}, []),
+            ({'attachments': ['relative/path']}, []),
+            ({'attachments': []}, [{'name': 'test.txt', 'data': 'not base64!'}]),
+            ({'attachments': []}, [{'name': '', 'data': ''}]),
+            ({'attachments': []}, 'invalid'),
+        ]):
+            with self.subTest(index=index):
+                self.namespace['apply_board_edit'](dict(event_id=f'bad-upload-{index}', task_id='ticket-a', updates=updates, uploaded_files=uploads))
+                self.assertFalse(self.state.board_save_result['ok'])
+                self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), before)
+        self.assertFalse(self.namespace['ATTACHMENTS_DIR'].exists())
+
+    def test_upload_total_size_limit_rejects_before_writing(self):
+        with patch.dict(self.namespace, MAX_ATTACHMENT_BYTES=3):
+            with self.assertRaises(ValueError):
+                self.namespace['save_uploaded_files']('ticket-a', [
+                    dict(name='a', data=base64.b64encode(b'12').decode()),
+                    dict(name='b', data=base64.b64encode(b'34').decode()),
+                ])
+        self.assertFalse(self.namespace['ATTACHMENTS_DIR'].exists())
+
+    def test_file_cleanup_after_ticket_save_failure(self):
+        before = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        with patch.dict(self.namespace, write_tasks_to_csv=lambda tasks: (_ for _ in ()).throw(OSError('Disk full'))):
+            self.namespace['apply_board_edit'](dict(
+                event_id='failed-upload', task_id='ticket-a', updates={'attachments': []},
+                uploaded_files=[dict(name='test.txt', data=base64.b64encode(b'hello').decode())],
+            ))
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), before)
+        self.assertFalse(any(path.is_file() for path in self.namespace['ATTACHMENTS_DIR'].rglob('*')))
+
+    def test_new_task_upload_saves_contents_and_link(self):
+        success, message = self.namespace['add_task'](
+            'New task', 'PRJ-001', 'Demo', ['person@example.com'], 'Backlog / To Do',
+            '2026-10-01', 'Details', ['https://example.com/file'],
+            uploaded_files=[dict(name='new.txt', data=base64.b64encode(b'new file').decode())],
+        )
+        self.assertTrue(success, message)
+        saved = self.namespace['load_tasks_from_csv']()[-1]
+        self.assertEqual(saved['attachments'][0], 'https://example.com/file')
+        self.assertEqual((Path(self.directory.name) / saved['attachments'][1]).read_bytes(), b'new file')
+
+    def test_missing_and_outside_files_are_not_exposed(self):
+        private = Path(self.directory.name) / 'private.txt'
+        private.write_text('private')
+        items = self.namespace['attachment_link_items']([str(private), 'missing.txt', r'C:\test.txt'])
+        self.assertTrue(all(not item['href'].startswith('data:') for item in items))
+        self.state.tasks[0]['attachments'] = ['missing.txt']
+        self.namespace['save_tasks_to_csv']()
+        self.edit({'attachments': ['missing.txt'], 'title': 'Still editable'})
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.edit({'attachments': []})
+        self.assertEqual(self.namespace['load_tasks_from_csv']()[0]['attachments'], [])
+
+    def test_local_folder_references_save_and_render_without_reading_them(self):
+        paths = [r'C:\Program Files', r'\\server\shared folder', '/srv/shared folder', 'file:///C:/Documents']
+        self.edit({'attachments': paths})
+        self.assertTrue(self.state.board_save_result['ok'])
+        items = self.namespace['attachment_link_items'](self.namespace['load_tasks_from_csv']()[0]['attachments'])
+        self.assertEqual(items[0]['href'], 'file:///C:/Program%20Files')
+        self.assertEqual(items[1]['href'], 'file://server/shared%20folder')
+        self.assertTrue(all(item['kind'] == 'folder' for item in items))
+        self.assertEqual([item['reference'] for item in items], paths)
+
+    def test_label_filters_match_any_selected_label_and_unlabelled_tasks(self):
+        matches = self.namespace['task_matches_filters']
+        task = self.state.tasks[0] | {'labels': ['urgent']}
+        self.assertTrue(matches(task, labels=[]))
+        self.assertTrue(matches(task, labels=['urgent', 'review']))
+        self.assertFalse(matches(task, labels=['review']))
+        self.assertFalse(matches(task, labels=['__no_labels__']))
+        self.assertTrue(matches(self.state.tasks[0], labels=['__no_labels__']))
+        self.assertTrue(matches(task, labels=['__no_labels__', 'urgent']))
+
+    def test_new_task_notifies_only_after_save_and_records_sending_failure(self):
+        def notify(task):
+            self.assertIn(task['id'], [saved['id'] for saved in self.namespace['load_tasks_from_csv']()])
+            return {'status': 'failed', 'message': 'Mail server unavailable'}
+        with patch.dict(self.namespace, send_new_task_notification=notify):
+            success, message = self.namespace['add_task']('Notification task', 'PRJ-001', 'Demo', ['person@example.com'], 'Backlog / To Do', '2026-10-01', 'Details', [])
+        self.assertTrue(success, message)
+        self.assertEqual(self.namespace['load_tasks_from_csv']()[-1]['email_notification_status'], 'failed')
+        self.assertFalse(self.namespace['load_tasks_from_csv']()[-1]['email_notification'])
+        self.assertEqual(self.state.last_notification_result['status'], 'failed')
+
     def test_clear_filters_restores_all_categories(self):
         self.state.project_ids = ['PRJ-001']
         self.state.filter_keyword = 'parts'
         self.state.filter_members = ['first@example.com']
         self.state.filter_due = 'Overdue'
-        self.state.filter_projects = []
+        self.state.filter_labels = ['urgent']
         self.state.status_filter = []
         self.namespace['reset_board_filters']()
         self.assertEqual(self.state.filter_keyword, '')
         self.assertEqual(self.state.filter_members, [])
         self.assertEqual(self.state.filter_due, 'Any date')
-        self.assertEqual(self.state.filter_projects, ['PRJ-001'])
+        self.assertEqual(self.state.filter_labels, [])
         self.assertEqual(self.state.status_filter, self.state.statuses)
 
 

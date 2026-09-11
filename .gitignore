@@ -7,3 +7,4 @@ venv/
 project_planner_actions.csv
 board_columns.json
 board_labels.json
+attachments/
