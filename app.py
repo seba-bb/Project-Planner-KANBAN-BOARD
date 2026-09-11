@@ -1151,8 +1151,18 @@ def build_board_html(statuses: list[str], people: list[str], tasks: list[dict[st
         text-decoration: none;
     }}
     .due-current {{
+        border-radius: 4px;
         color: #334155;
         font-weight: 800;
+        padding: 2px 5px;
+    }}
+    .due-current.due-soon {{
+        background: #fef08a;
+        color: #713f12;
+    }}
+    .due-current.due-overdue {{
+        background: #fecaca;
+        color: #991b1b;
     }}
     details {{
         border-top: 1px solid #e2e8f0;
@@ -2104,6 +2114,38 @@ function renderActivity(task) {{
     }});
 }}
 
+function renderDueDate(element, value, today = new Date()) {{
+    const dateText = text(value);
+    element.textContent = dateText;
+    element.classList.remove("due-soon", "due-overdue");
+    element.removeAttribute("title");
+    element.removeAttribute("aria-label");
+    if (!/^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(dateText)) return;
+    const due = new Date(`${{dateText}}T00:00:00Z`);
+    if (!Number.isFinite(due.getTime()) || due.toISOString().slice(0, 10) !== dateText) return;
+    // Compare calendar dates in the user's timezone, without DST-length days.
+    const todayDate = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+    const daysLeft = Math.round((due.getTime() - todayDate) / 86400000);
+    let description;
+    if (daysLeft < 0) {{
+        element.classList.add("due-overdue");
+        description = `Overdue by ${{-daysLeft}} ${{daysLeft === -1 ? "day" : "days"}}`;
+    }} else {{
+        if (daysLeft <= 5) element.classList.add("due-soon");
+        description = daysLeft === 0 ? "Due today" : `Due in ${{daysLeft}} ${{daysLeft === 1 ? "day" : "days"}}`;
+    }}
+    element.title = description;
+    element.setAttribute("aria-label", `${{dateText}}: ${{description}}`);
+}}
+
+function refreshDueDates() {{
+    const today = new Date();
+    data.tasks.forEach(task => {{
+        const element = document.getElementById(task.id)?.querySelector(".due-current");
+        if (element) renderDueDate(element, task.due, today);
+    }});
+}}
+
 function updateCardFromTask(card, task) {{
     card.className = cardClass(task.status);
     card.dataset.owner = task.owner;
@@ -2119,7 +2161,7 @@ function updateCardFromTask(card, task) {{
             dueHistory.appendChild(oldDateNode);
         }});
     }}
-    card.querySelector(".due-current").textContent = text(task.due);
+    renderDueDate(card.querySelector(".due-current"), task.due);
     renderAssignees(card.querySelector(".task-assignees"), task);
     const projectBadge = card.querySelector(".task-project-id-badge");
     if (projectBadge) {{
@@ -2358,6 +2400,11 @@ function renderBoard() {{
 }}
 
 renderBoard();
+// Refresh an open board when the date changes or the user returns to the tab.
+setInterval(refreshDueDates, 60000);
+document.addEventListener("visibilitychange", () => {{
+    if (!document.hidden) refreshDueDates();
+}});
 </script>
 </body>
 </html>

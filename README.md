@@ -54,6 +54,7 @@ Cards show the task title, project, due date, and assignee initials. Open the ta
 
 - Shared Kanban board with drag-and-drop task cards.
 - Task creation and editing.
+- Due dates highlighted yellow from today through the next five days, and red when overdue, using the viewer’s local date.
 - Configurable status columns and owner roles.
 - Multiple project IDs with customizable colors.
 - Assignment of multiple responsible people to a task, with new email addresses added directly in the responsible-person selector.
