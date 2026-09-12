@@ -90,7 +90,7 @@ Old entries that contain only a filename without a saved file are marked unavail
 - Shared colored labels with search, multiple selections, and inline creation and editing.
 - Due dates highlighted yellow from today through the next five days, and red when overdue, using the viewer’s local date.
 - Configurable status columns with a **⋯ Column actions** menu for saved sorting and archiving.
-- Recoverable column and ticket archives, available from **Archived items** above the board.
+- Recoverable column and ticket archives, available from **Archived items** below the board.
 - Assignment of multiple responsible people to a task, with new email addresses added directly in the responsible-person selector.
 - A single clickable file/link list with **Add link**, **Upload file**, and removal controls inside each ticket.
 - A top **Filter** button opens keyword, member, status, due-date, and label filters. **Clear filters** restores the full board. Due-date filters use the application server’s calendar date.
@@ -115,6 +115,8 @@ Copy [the SMTP example](.streamlit/secrets.toml.example) to `.streamlit/secrets.
 
 Alternatively, configure `PP_SMTP_HOST`, `PP_SMTP_PORT`, `PP_SMTP_FROM_EMAIL`, `PP_SMTP_SECURITY`, `PP_SMTP_USERNAME`, `PP_SMTP_PASSWORD`, and `PP_SMTP_APP_URL` in the server environment. Environment variables override the secrets file. Without a configured host and sender, the app saves the ticket and displays that email was not sent.
 
+Notifications for assignment changes on existing tasks and new comments are planned below; they are not implemented yet.
+
 ## Configuration Inventory
 
 [CMDB — configuration items, dependencies, storage, and recovery notes](CMDB.md) (Polish). Machine-readable registers are available in [docs/cmdb](docs/cmdb).
@@ -133,11 +135,26 @@ If setting up a new checkout without an existing virtual environment, create one
 
 ## Planned Improvements
 
+### Backup and Recovery Tasks
+
+- [ ] Add automatic snapshots before board changes, scheduled backups, and a manual **Back up now** option.
+- [ ] Back up the task CSV, column names/order/settings, labels, and uploaded attachments together. Include comments, checklists, and activity once they are stored centrally; browser-only data is not currently part of server backups.
+- [ ] Add recovery of an individual ticket or the whole board from a selected snapshot, with a preview of the changes. Explain that restoring the whole board rolls back later changes by all users.
+- [ ] Add configurable backup retention and protected backup storage. Keep everyday board access open while restricting backup deletion and snapshot recovery to an administrator.
+
+### Email Notification Tasks
+
+- [ ] Notify each newly assigned responsible person after an assignment is saved, including assignments added to existing tickets. Retain the existing new-task notification behavior without sending duplicates.
+- [ ] Notify all currently assigned responsible people when a new comment is successfully saved. Include the task title, comment text, and a ticket link when configured. Store comments centrally first so notifications and shared comment history refer to the same saved comment.
+- [ ] Record notification attempts and failures, and support retries without duplicate messages or loss of the saved assignment/comment.
+
+### Other Improvements
+
 - Centralized PostgreSQL storage for shared multi-user use.
 - Persistent task history, comments, and checklists.
 - Dedicated views for personal tasks, overdue work, and blocked tasks.
 - User authentication and permissions.
-- Project reports and notification retry management.
+- Project reports.
 - Kanban metrics such as work in progress, throughput, and cycle time.
 - ERP, Outlook, and Microsoft Teams integration.
 
