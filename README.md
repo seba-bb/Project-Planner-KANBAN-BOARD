@@ -48,7 +48,7 @@ Charts include hover details and expandable data tables. Summary cards show task
 
 ### Task Calendar
 
-Click **Calendar**, immediately before **Statistics** and **Filter**, to see tasks on their required completion (due) dates. Use **Previous month**, **Next month**, **Today**, or the date picker to select a month. Click a calendar task to expand its details; edit tickets from the board.
+Click **Calendar**, immediately before **Statistics** and **Filter**, to see tasks on their required completion (due) dates across **three consecutive months**. The selected month appears first, followed by the next two months. Months appear side by side where space allows and wrap on smaller screens. Use **Previous month** or **Next month** to shift the overview by one month; **Today** starts it at the current month, and the date picker selects its first month. Each task appears only in its own month. Click a calendar task to expand its full title and details; edit tickets from the board.
 
 Past due dates appear in red with an **Overdue** label. Dates from today through the next five days appear in yellow; later dates appear in green. The **Overdue tasks** list also includes earlier months, and tasks without a valid due date are listed separately. The calendar uses the application server's date and follows the board filters, excluding archived tickets and columns. All selected columns are included; filter to unfinished columns when reviewing outstanding work. **Back to board** keeps the current filters.
 

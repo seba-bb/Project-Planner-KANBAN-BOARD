@@ -181,6 +181,9 @@ def declare_test_component(*args, **kwargs):
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state.calendar_month, date(2026, 8, 1))
         calendar_html = next(item.proto.body for item in app.get('html') if 'planner-calendar' in item.proto.body)
+        self.assertEqual(calendar_html.count('<table>'), 3)
+        for month in ['August 2026', 'September 2026', 'October 2026']:
+            self.assertIn(f'<caption>{month}</caption>', calendar_html)
         for task in expected:
             self.assertIn(f'data-task-id="{task["id"]}"', calendar_html)
         app.button(key='calendar_next').click().run(timeout=15)

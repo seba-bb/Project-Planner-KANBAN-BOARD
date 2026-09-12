@@ -2,7 +2,7 @@ from datetime import date
 from html.parser import HTMLParser
 import unittest
 
-from board_calendar import build_calendar_html, calendar_tasks, shift_month
+from board_calendar import build_calendar_html, build_calendar_overview_html, calendar_tasks, shift_month
 
 
 class CalendarParser(HTMLParser):
@@ -65,6 +65,20 @@ class BoardCalendarTests(unittest.TestCase):
         self.assertNotIn('<img ', html)
         self.assertIn('&lt;script&gt;', html)
         self.assertIn('A &amp; B', html)
+
+    def test_three_month_overview_crosses_year_and_does_not_duplicate_boundary_tasks(self):
+        tasks = [self.task('december', '2026-12-31'), self.task('january', '2027-01-01'),
+                 self.task('february', '2027-02-01'), self.task('outside', '2027-03-01')]
+        html = build_calendar_overview_html(tasks, date(2026, 12, 1), date(2027, 1, 1))
+        self.assertEqual(html.count('<table>'), 3)
+        for month in ['December 2026', 'January 2027', 'February 2027']:
+            self.assertIn(f'<caption>{month}</caption>', html)
+        parser = CalendarParser(html)
+        for task in tasks[:3]:
+            self.assertEqual(html.count(f'data-task-id="{task["id"]}"'), 1)
+            self.assertEqual(parser.tasks[task['id']][0], task['due'])
+        self.assertNotIn('outside', parser.tasks)
+        self.assertIn('overdue', parser.tasks['december'][1])
 
 
 if __name__ == '__main__':

@@ -29,7 +29,7 @@ def calendar_tasks(tasks):
     return grouped, undated
 
 
-def build_calendar_html(tasks, month, today=None):
+def build_calendar_html(tasks, month, today=None, *, show_adjacent_tasks=True):
     today = today or date.today()
     grouped, _ = calendar_tasks(tasks)
     parts = ['''<style>
@@ -61,7 +61,7 @@ def build_calendar_html(tasks, month, today=None):
             classes = ('outside-month ' if day.month != month.month else '') + ('today' if day == today else '')
             current = ' aria-current="date"' if day == today else ''
             parts.append(f'<td class="{classes}" data-date="{day.isoformat()}"><time class="day-number" datetime="{day.isoformat()}"{current}>{day.day}{" · Today" if day == today else ""}</time>')
-            for task in grouped.get(day, []):
+            for task in grouped.get(day, []) if show_adjacent_tasks or day.month == month.month else []:
                 days = (day - today).days
                 urgency = 'overdue' if days < 0 else 'due-soon' if days <= 5 else ''
                 label = f'Overdue · {-days} day(s)' if days < 0 else 'Due today' if days == 0 else f'Due in {days} day(s)'
@@ -70,7 +70,7 @@ def build_calendar_html(tasks, month, today=None):
                     members = ', '.join(members)
                 parts.append(
                     f'<details class="calendar-task {urgency}" data-task-id="{escape(str(task.get("id", "")), quote=True)}">'
-                    f'<summary><span class="task-title">{escape(task["title"])}</span>'
+                    f'<summary><span class="task-title" title="{escape(task["title"])}">{escape(task["title"])}</span>'
                     f'<span class="due-label">{label}</span></summary><div class="calendar-task-body">'
                     f'<strong>Due:</strong> {day.isoformat()}<br><strong>Column:</strong> {escape(task["status"])}<br>'
                     f'<strong>Responsible:</strong> {escape(members or "Unassigned")}'
@@ -80,6 +80,24 @@ def build_calendar_html(tasks, month, today=None):
         parts.append('</tr>')
     parts.append('</tbody></table></div>')
     return ''.join(parts)
+
+
+def build_calendar_overview_html(tasks, month, today=None):
+    months = ''.join(build_calendar_html(tasks, shift_month(month, offset), today, show_adjacent_tasks=False)
+                     for offset in range(3))
+    return '''<style>
+    .calendar-months { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+    .calendar-overview .planner-calendar { background: #f5fbf1; border: 1px solid #dbe8d3; border-radius: 12px; padding: 6px; }
+    .calendar-overview .planner-calendar table { min-width: 360px; border-spacing: 3px; }
+    .calendar-overview .planner-calendar caption { font-size: 1.2rem; }
+    .calendar-overview .planner-calendar th { padding: 7px 2px; font-size: .75rem; }
+    .calendar-overview .planner-calendar td { height: 90px; padding: 4px; }
+    .calendar-overview .planner-calendar .day-number { font-size: .75rem; margin-bottom: 5px; }
+    .calendar-overview .planner-calendar summary { padding: 4px; }
+    .calendar-overview .planner-calendar .calendar-task { font-size: .75rem; border-left-width: 3px; }
+    .calendar-overview .planner-calendar .task-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .calendar-overview .planner-calendar details[open] .task-title { display: block; }
+    </style><div class="calendar-overview"><div class="calendar-months">''' + months + '</div></div>'
 
 
 def render_calendar(tasks):
@@ -97,14 +115,15 @@ def render_calendar(tasks):
 
     month = st.session_state.calendar_month
     st.session_state.setdefault('calendar_jump', month)
-    st.subheader('Task calendar')
+    st.subheader('Task calendar · 3-month overview')
     st.caption('Tasks appear on their required completion date and follow the board filters. Archived items are excluded. Filter to unfinished columns to focus on outstanding work.')
     previous, current, following, picker = st.columns([1, 1, 1, 3])
     previous.button('Previous month', key='calendar_previous', on_click=select_month, args=(shift_month(month, -1),), disabled=month == date(2, 1, 1), width='stretch')
     current.button('Today', key='calendar_today', on_click=select_month, args=(today,), width='stretch')
     following.button('Next month', key='calendar_next', on_click=select_month, args=(shift_month(month, 1),), disabled=month == date(9998, 12, 1), width='stretch')
     picker.date_input('Go to month', value=None, min_value=date(2, 1, 1), max_value=date(9998, 12, 31),
-                      key='calendar_jump', on_change=jump_to_month, label_visibility='collapsed', help='Choose any date in the month you want to view.')
+                      key='calendar_jump', on_change=jump_to_month, label_visibility='collapsed', help='Choose the first of the three displayed months.')
+    st.caption(f'{month.strftime("%B %Y")} – {shift_month(month, 2).strftime("%B %Y")} · Navigation shifts the overview one month at a time.')
     grouped, undated = calendar_tasks(tasks)
     overdue = [task for due in sorted(grouped) if due < today for task in grouped[due]]
     if overdue:
@@ -112,7 +131,7 @@ def render_calendar(tasks):
     st.caption('Red: overdue · Yellow: due today or within 5 days · Green: due later. Click a task to see its details.')
     if not tasks:
         st.info('No tasks match these filters. Change or clear the filters to see calendar tasks.')
-    st.html(build_calendar_html(tasks, month, today))
+    st.html(build_calendar_overview_html(tasks, month, today))
     if overdue:
         with st.expander(f'Overdue tasks ({len(overdue)})'):
             st.dataframe([{'Task': task['title'], 'Due': task['due'], 'Column': task['status'],
