@@ -36,10 +36,12 @@ class TaskPersistenceTests(unittest.TestCase):
             TASK_DATABASE_CSV=Path(self.directory.name) / 'tasks.csv',
             BOARD_LABELS_JSON=Path(self.directory.name) / 'labels.json',
             BOARD_COLUMNS_JSON=Path(self.directory.name) / 'columns.json',
+            COLUMN_SETTINGS_JSON=Path(self.directory.name) / 'column_settings.json',
         )
         source = Path(__file__).resolve().parents[1] / 'app.py'
         tree = ast.parse(source.read_text(encoding='utf-8-sig'))
         functions = {
+            'load_column_settings', 'write_column_settings', 'set_column_options', 'sort_column_tasks', 'apply_task_archive',
             'save_uploaded_files', 'cleanup_uploaded_files', 'safe_storage_name', 'unique_file_path',
             'clean_attachment_link', 'local_folder_uri', 'upload_payload', 'attachment_link_items', 'add_task', 'apply_new_task',
             'merge_board_labels', 'load_board_labels', 'write_board_labels',
@@ -521,6 +523,92 @@ class TaskPersistenceTests(unittest.TestCase):
         self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original)
         self.assertEqual(self.namespace['load_board_labels'](), [])
         self.assertFalse(any(path.is_file() for path in self.namespace['ATTACHMENTS_DIR'].rglob('*')))
+
+    def test_column_sorting_due_responsible_and_labels_put_missing_last(self):
+        rows = [
+            dict(id='a', due='2026-10-03', responsible_emails=['zoe@example.com'], labels=['z']),
+            dict(id='b', due='', responsible_emails=[], labels=[]),
+            dict(id='c', due='2026-10-01', responsible_emails=['Anna@example.com'], labels=['a']),
+            dict(id='d', due='2026-10-01', responsible_emails=['bob@example.com'], labels=['a']),
+        ]
+        labels = [dict(id='z', name='Zebra'), dict(id='a', name='Alpha')]
+        sort = self.namespace['sort_column_tasks']
+        for field in ('due', 'responsible', 'label'):
+            self.assertEqual([task['id'] for task in sort(rows, field, labels)], ['c', 'd', 'a', 'b'])
+        self.assertEqual(sort(rows, 'default', labels), rows)
+        self.assertEqual([task['id'] for task in rows], ['a', 'b', 'c', 'd'])
+
+    def test_archive_column_preserves_tickets_position_and_sort_when_restored(self):
+        status = self.state.statuses[0]
+        original_csv = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        original_order = self.namespace['load_board_columns']()
+        self.namespace['set_column_options'](status, sort_by='due')
+        self.namespace['apply_column_action'](dict(event_id='archive-column', action='archive_column', status=status))
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['load_column_settings']()[status], {'sort': 'due', 'archived': True})
+        self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original_csv)
+        self.assertEqual(self.namespace['load_board_columns'](), original_order)
+        self.namespace['apply_column_action'](dict(event_id='restore-column', action='restore_column', status=status))
+        self.assertEqual(self.namespace['load_column_settings']()[status], {'sort': 'due', 'archived': False})
+        self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original_csv)
+
+    def test_sort_preference_survives_rename_and_failed_rename_rolls_it_back(self):
+        old = self.state.statuses[0]
+        self.namespace['set_column_options'](old, sort_by='label')
+        renamed = ['Ready', *self.state.statuses[1:]]
+        with patch.dict(self.namespace, write_board_columns=lambda names: (_ for _ in ()).throw(OSError('Disk full'))):
+            success, _ = self.namespace['rename_board_columns'](renamed)
+        self.assertFalse(success)
+        self.assertEqual(self.namespace['load_column_settings'](), {old: {'sort': 'label'}})
+        success, message = self.namespace['rename_board_columns'](renamed)
+        self.assertTrue(success, message)
+        self.assertEqual(self.namespace['load_column_settings'](), {'Ready': {'sort': 'label'}})
+
+    def test_failed_column_archive_and_invalid_sort_do_not_change_saved_options(self):
+        status = self.state.statuses[0]
+        self.namespace['set_column_options'](status, sort_by='responsible')
+        previous = self.namespace['COLUMN_SETTINGS_JSON'].read_bytes()
+        with patch.object(os, 'replace', side_effect=OSError('Disk full')):
+            success, _ = self.namespace['set_column_options'](status, archived=True)
+        self.assertFalse(success)
+        self.assertEqual(self.namespace['COLUMN_SETTINGS_JSON'].read_bytes(), previous)
+        success, _ = self.namespace['set_column_options'](status, sort_by='invalid')
+        self.assertFalse(success)
+        self.assertEqual(self.namespace['COLUMN_SETTINGS_JSON'].read_bytes(), previous)
+
+    def test_ticket_archive_and_restore_preserve_its_contents_and_id(self):
+        task = self.state.tasks[0]
+        task['labels'] = ['review']
+        task['attachments'] = ['https://example.com/document', 'attachments/example.txt']
+        self.namespace['save_tasks_to_csv']()
+        original = self.namespace['load_tasks_from_csv']()[0]
+        self.namespace['apply_task_archive'](dict(event_id='archive-ticket', action='archive_task', task_id=task['id']))
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['load_tasks_from_csv']()[0], original | {'archived': True})
+        self.edit({'title': 'Stale edit'})
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.namespace['apply_task_archive'](dict(event_id='restore-ticket', action='restore_task', task_id=task['id']))
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['load_tasks_from_csv']()[0], original)
+
+    def test_archived_column_blocks_new_tickets_and_requires_restoration_first(self):
+        status = self.state.statuses[0]
+        self.namespace['apply_task_archive'](dict(event_id='archive-ticket', action='archive_task', task_id='ticket-a'))
+        self.namespace['set_column_options'](status, archived=True)
+        self.namespace['apply_task_archive'](dict(event_id='restore-ticket', action='restore_task', task_id='ticket-a'))
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertTrue(self.namespace['load_tasks_from_csv']()[0]['archived'])
+        self.namespace['apply_new_task'](self.new_task_event(status=status))
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertEqual(len(self.namespace['load_tasks_from_csv']()), 1)
+
+    def test_failed_ticket_archive_preserves_saved_ticket(self):
+        before = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        with patch.object(os, 'replace', side_effect=OSError('Disk full')):
+            self.namespace['apply_task_archive'](dict(event_id='archive-failed', action='archive_task', task_id='ticket-a'))
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), before)
+        self.assertFalse(self.state.tasks[0].get('archived', False))
 
     def test_clear_filters_restores_all_categories(self):
         self.state.project_ids = ['PRJ-001']

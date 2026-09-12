@@ -77,6 +77,48 @@ def declare_test_component(*args, **kwargs):
         self.assertNotIn(original[0], {task['status'] for task in second.session_state.tasks})
         self.assertEqual(self.board(self.session())['statuses'], ['Ready', *expected[1:]])
 
+    def test_column_archive_hides_then_restores_saved_tickets_after_reload(self):
+        app = self.session()
+        status = app.session_state.statuses[0]
+        original_csv = (self.target / 'project_planner_actions.csv').read_bytes()
+        self.event(app, event_id='sort', action='sort_column', status=status, sort_by='due')
+        self.event(app, event_id='archive', action='archive_column', status=status)
+        self.assertNotIn(status, self.board(app)['statuses'])
+        self.assertFalse(any(task['status'] == status for task in self.board(app)['tasks']))
+        self.assertEqual((self.target / 'project_planner_actions.csv').read_bytes(), original_csv)
+        app = self.session()
+        self.assertNotIn(status, self.board(app)['statuses'])
+        app.button(key=f'restore_column_{status}').click().run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertIn(status, self.board(app)['statuses'])
+        tasks = [task for task in self.board(app)['tasks'] if task['status'] == status]
+        self.assertTrue(tasks)
+        self.assertEqual([task['due'] for task in tasks], sorted(task['due'] for task in tasks))
+        self.assertEqual(self.board(app)['column_settings'][status]['sort'], 'due')
+
+    def test_ticket_archive_hides_then_restores_from_archive_control(self):
+        app = self.session()
+        task_id = self.board(app)['tasks'][0]['id']
+        self.event(app, event_id='archive-ticket', action='archive_task', task_id=task_id)
+        self.assertNotIn(task_id, [task['id'] for task in self.board(app)['tasks']])
+        app = self.session()
+        self.assertNotIn(task_id, [task['id'] for task in self.board(app)['tasks']])
+        app.button(key=f'restore_ticket_{task_id}').click().run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertIn(task_id, [task['id'] for task in self.board(app)['tasks']])
+        self.assertFalse(any('dashboard-strip' in element.value for element in app.markdown))
+
+    def test_archiving_all_columns_does_not_lose_them_or_prevent_adding_a_new_one(self):
+        app = self.session()
+        original = app.session_state.statuses.copy()
+        for index, status in enumerate(original):
+            self.event(app, event_id=f'archive-{index}', action='archive_column', status=status)
+        self.assertEqual(self.board(app)['statuses'], [])
+        self.assertEqual(self.board(app)['tasks'], [])
+        self.event(app, event_id='new-column', action='add_column', name='New active column')
+        self.assertEqual(self.board(app)['statuses'], ['New active column'])
+        self.assertEqual(app.session_state.statuses, original + ['New active column'])
+
 
 if __name__ == '__main__':
     unittest.main()

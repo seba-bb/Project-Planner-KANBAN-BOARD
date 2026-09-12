@@ -27,13 +27,19 @@ Each task appears as a card. Columns represent task status. Drag a card between 
 
 Click a column title to rename it directly in the header. Press **Enter** or click outside to save; **Escape** cancels. Empty and duplicate names are rejected. Column names and order are saved in `board_columns.json`, including empty columns, and existing tickets keep their assignments. Drag a column header to change its position; the header lifts and highlights while dragging. Click the shaded **+ Add column** header on the right to create a column in place. Column order is saved alongside column names. Changes use the latest saved column list so an older browser session retains columns added by another session. After adding a column, the board scrolls to the Add column header and opens a fresh name field so you can keep adding columns.
 
+### Column Actions and Archives
+
+Click **⋯** in a column header to open **Column actions**. Sort its tickets by **Due date** (earliest first), **Responsible** (email A–Z), or **Label** (name A–Z). Multiple assignees or labels are compared alphabetically, and missing values sort last. **Default order** restores the saved task order. Each column’s sort preference survives reloads and applies to new or edited tickets.
+
+**Archive column** hides the column and its tickets without deleting them or changing their assignments. Open **Archived items → Columns** above the board to restore it in its saved position, with its sorting preference intact. You can also open a ticket and choose **Archive ticket**. Restore individually archived tickets through **Archived items → Tickets**; restore their column first if it is archived too. Ticket IDs, labels, file references, and stored contents are retained. Archiving is available for existing tickets, after creation.
+
 ### Task Ownership
 
 Assign responsible people to individual tasks using email addresses. Edit a task to change its assignees or add a new email address directly in the selector.
 
 ### Task Cards
 
-Cards show the task title, labels directly underneath, and then Details. Project names, due dates, and assignee initials remain visible; Project ID badges are removed. Open the task details or double-click a card to view or edit additional information, including:
+Cards show the task title, labels directly underneath, and then Details. Due dates and assignee initials remain visible; Project ID and project name are not shown on cards. Open the task details or double-click a card to view or edit additional information, including:
 
 - Colored labels.
 - Responsible people.
@@ -62,27 +68,27 @@ Old entries that contain only a filename without a saved file are marked unavail
 3. Move a card to In Progress when work starts.
 4. Update task details and attach supporting documents as needed.
 5. Move finished tasks to Completed, or declined tasks to Rejected.
-6. Open **Filter** above the board to focus on relevant tasks; filters across categories are combined. **Labels** matches any selected label, and **No labels** finds unlabelled tickets. Filters narrow the tickets while every saved column remains visible, including empty columns.
+6. Open **Filter** above the board to focus on relevant tasks; filters across categories are combined. **Labels** matches any selected label, and **No labels** finds unlabelled tickets. Filters narrow the tickets while every active column remains visible, including empty columns. Archived columns stay hidden until restored.
 
 ## Current Features
 
-- Shared Kanban board with drag-and-drop task cards.
+- Green Kanban board using `#C1FEAC`, with white cards, compact headers, and drag-and-drop task cards.
 - Task creation and editing through the same form, including label creation and file uploads.
 - Shared colored labels with search, multiple selections, and inline creation and editing.
 - Due dates highlighted yellow from today through the next five days, and red when overdue, using the viewer’s local date.
-- Configurable status columns.
+- Configurable status columns with a **⋯ Column actions** menu for saved sorting and archiving.
+- Recoverable column and ticket archives, available from **Archived items** above the board.
 - Assignment of multiple responsible people to a task, with new email addresses added directly in the responsible-person selector.
 - A single clickable file/link list with **Add link**, **Upload file**, and removal controls inside each ticket.
 - A top **Filter** button opens keyword, member, status, due-date, and label filters. **Clear filters** restores the full board. Due-date filters use the application server’s calendar date.
-- Statistics below the board for visible tasks, projects, To Do tasks, and columns.
 - Local CSV task storage.
 - Full-width board without a left sidebar; column controls are available directly in the board headers.
 
 ## Technology and Storage
 
 - **Application:** Python and Streamlit, with an embedded HTML/CSS/JavaScript board.
-- **Task storage:** `project_planner_actions.csv` in the application directory.
-- **Column configuration:** `board_columns.json` in the application directory; include this file alongside the CSV when backing up the board.
+- **Task storage:** `project_planner_actions.csv` in the application directory, including each ticket’s archive flag. Archiving retains its row.
+- **Column configuration:** `board_columns.json` retains all column names and order. `board_column_settings.json` stores each column’s sorting preference and archive flag. Include both files alongside the CSV in backups.
 - **Labels:** `board_labels.json` stores shared label names and colors; the task CSV stores selected label IDs. Include both files in backups.
 - **Attachments:** File contents are stored in `attachments/<ticket-id>/`; the CSV stores their relative paths alongside web links and folder references. Include the attachments directory in backups.
 
@@ -130,4 +136,4 @@ npm ci --prefix tests/ui
 npm test --prefix tests/ui
 ```
 
-The UI regression tests use jsdom and the project VENV to render an isolated board. They cover repeated column creation, iframe refreshes, and failed-save retries without opening or modifying the live CSV. Python integration tests also exercise multiple Streamlit sessions and status-filter changes against temporary storage.
+The UI regression tests use jsdom and the project VENV to render an isolated board. They cover repeated column creation, iframe refreshes, column actions, ticket archiving, and failed-save retries without opening or modifying the live CSV. Python integration tests also exercise multiple Streamlit sessions, status-filter changes, and archive/restore operations against temporary storage.

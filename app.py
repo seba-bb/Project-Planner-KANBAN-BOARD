@@ -39,6 +39,7 @@ MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 TASK_DATABASE_CSV = Path(__file__).parent / "project_planner_actions.csv"
 BOARD_COLUMNS_JSON = Path(__file__).parent / "board_columns.json"
 BOARD_LABELS_JSON = Path(__file__).parent / "board_labels.json"
+COLUMN_SETTINGS_JSON = Path(__file__).parent / "board_column_settings.json"
 TASK_CSV_FIELDS = [
     "id",
     "title",
@@ -53,6 +54,7 @@ TASK_CSV_FIELDS = [
     "email_notification",
     "email_notification_status",
     "labels",
+    "archived",
 ]
 
 # Demo seed data used when no CSV task database exists yet.
@@ -185,6 +187,7 @@ def task_from_csv_row(row: dict[str, str]) -> dict[str, object]:
         "description": row.get("description", "No additional details provided."),
         "attachments": attachments,
         "labels": csv_json_list(row.get("labels", "")),
+        "archived": row.get("archived", "").strip().lower() in {"1", "true", "yes"},
         "email_notification_status": row.get("email_notification_status", ""),
         "email_notification": row.get("email_notification", "").strip().lower() in {"1", "true", "yes"},
     }
@@ -219,6 +222,7 @@ def task_to_csv_row(task: dict[str, object]) -> dict[str, str]:
         "description": str(task.get("description", "")),
         "attachments": json.dumps(task.get("attachments", []), ensure_ascii=False),
         "labels": json.dumps(task.get("labels", []), ensure_ascii=False),
+        "archived": "true" if task.get("archived", False) else "false",
         "email_notification": "true" if task.get("email_notification") else "false",
         "email_notification_status": str(task.get("email_notification_status", "")),
     }
@@ -285,6 +289,8 @@ def apply_board_edit(event: object) -> None:
         task = next((task for task in tasks if task.get("id") == event.get("task_id")), None)
         if task is None:
             raise ValueError("This ticket no longer exists. Reload the board.")
+        if task.get("archived", False):
+            raise ValueError("This ticket is archived. Restore it before editing.")
         if "attachments" in updates:
             old_attachments = task.get("attachments", [])
             updates = updates | {"attachments": list(dict.fromkeys(
@@ -292,6 +298,8 @@ def apply_board_edit(event: object) -> None:
                 for reference in updates["attachments"]
             ))}
         task.update(updates)
+        if load_column_settings().get(task["status"], {}).get("archived", False):
+            raise ValueError("This column is archived. Restore it before editing its tickets.")
         if not task["title"].strip():
             raise ValueError("Task title is required.")
         task["responsible_emails"] = clean_responsible_emails(task["responsible_emails"])
@@ -324,6 +332,31 @@ def apply_board_edit(event: object) -> None:
             "event_id": event_id, "ok": False,
             "error": f"Ticket was not saved: {error}",
         }
+
+
+def apply_task_archive(event: dict) -> None:
+    event_id = event.get("event_id")
+    if not isinstance(event_id, str) or st.session_state.get("board_save_result", {}).get("event_id") == event_id:
+        return
+    try:
+        if event.get("action") not in {"archive_task", "restore_task"}:
+            raise ValueError("Invalid archive action.")
+        tasks = load_tasks_from_csv()
+        task = next((task for task in tasks if task["id"] == event.get("task_id")), None)
+        if task is None:
+            raise ValueError("This ticket no longer exists.")
+        archived = event["action"] == "archive_task"
+        if not archived and load_column_settings().get(task["status"], {}).get("archived", False):
+            raise ValueError("Restore the ticket's column first.")
+        task["archived"] = archived
+        write_tasks_to_csv(tasks)
+        st.session_state.tasks = tasks
+        if not archived and "status_filter" in st.session_state:
+            selected = st.session_state.get("updated_status_filter", st.session_state.status_filter)
+            st.session_state.updated_status_filter = list(dict.fromkeys([*selected, task["status"]]))
+        st.session_state.board_save_result = {"event_id": event_id, "ok": True}
+    except (OSError, ValueError) as error:
+        st.session_state.board_save_result = {"event_id": event_id, "ok": False, "error": f"Archive action failed: {error}"}
 
 
 def merge_board_labels(existing: list[dict], changes: object) -> list[dict]:
@@ -396,6 +429,86 @@ def write_board_columns(columns: list[str]) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
+def load_column_settings() -> dict[str, dict]:
+    if not COLUMN_SETTINGS_JSON.exists():
+        return {}
+    settings = json.loads(COLUMN_SETTINGS_JSON.read_text(encoding="utf-8"))
+    if not isinstance(settings, dict):
+        raise ValueError("Invalid saved column settings.")
+    for name, options in settings.items():
+        if (not isinstance(name, str) or not name.strip() or not isinstance(options, dict)
+                or set(options) - {"archived", "sort"}
+                or not isinstance(options.get("archived", False), bool)
+                or options.get("sort", "default") not in {"default", "due", "responsible", "label"}):
+            raise ValueError("Invalid saved column settings.")
+    return settings
+
+
+def write_column_settings(settings: dict[str, dict]) -> None:
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=COLUMN_SETTINGS_JSON.parent, delete=False,
+        ) as file:
+            temporary_path = Path(file.name)
+            json.dump(settings, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        os.replace(temporary_path, COLUMN_SETTINGS_JSON)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def set_column_options(status: str, *, archived: bool | None = None, sort_by: str | None = None) -> tuple[bool, str]:
+    try:
+        columns = load_board_columns() if BOARD_COLUMNS_JSON.exists() else st.session_state.statuses
+        if not isinstance(status, str) or status not in columns:
+            return False, "This column no longer exists. Reload the board."
+        if archived is not None and not isinstance(archived, bool):
+            return False, "Invalid archive option."
+        if sort_by is not None and sort_by not in {"default", "due", "responsible", "label"}:
+            return False, "Invalid sort option."
+        settings = load_column_settings()
+        options = settings.get(status, {}).copy()
+        if sort_by is not None:
+            if options.get("archived", False):
+                return False, "Restore the column before sorting it."
+            options["sort"] = sort_by
+        if archived is not None:
+            options["archived"] = archived
+        settings[status] = options
+        write_column_settings(settings)
+        if archived is not None and "status_filter" in st.session_state:
+            selected = st.session_state.get("updated_status_filter", st.session_state.status_filter)
+            st.session_state.updated_status_filter = [name for name in selected if name != status]
+            if not archived:
+                st.session_state.updated_status_filter.append(status)
+        return True, "Column settings saved."
+    except (OSError, ValueError) as error:
+        return False, f"Column settings were not saved: {error}"
+
+
+def sort_column_tasks(tasks: list[dict], sort_by: str, labels: list[dict]) -> list[dict]:
+    if sort_by == "default":
+        return list(tasks)
+    label_names = {label["id"]: label["name"].casefold() for label in labels}
+
+    def key(task: dict) -> tuple:
+        if sort_by == "due":
+            try:
+                due = date.fromisoformat(str(task.get("due", ""))).isoformat()
+                return (False, due)
+            except ValueError:
+                return (True, "")
+        if sort_by == "responsible":
+            values = sorted(email.casefold() for email in responsible_emails_list(task))
+        else:
+            values = sorted(label_names[label] for label in task.get("labels", []) if label in label_names)
+        return (not values, tuple(values))
+
+    return sorted(tasks, key=key)
+
+
 def rename_board_columns(new_names: list[str]) -> tuple[bool, str]:
     old_names = st.session_state.statuses.copy()
     names = [normalize_name(name) for name in new_names]
@@ -414,14 +527,22 @@ def rename_board_columns(new_names: list[str]) -> tuple[bool, str]:
         names = [rename_map.get(name, name) for name in latest_names]
         if len(set(names)) != len(names):
             return False, "Column names must be unique."
+        original_settings = load_column_settings()
+        renamed_settings = {rename_map.get(name, name): options for name, options in original_settings.items()}
         original_tasks = load_tasks_from_csv()
         tasks = [task | {"status": rename_map.get(task["status"], task["status"])} for task in original_tasks]
         if tasks != original_tasks:
             write_tasks_to_csv(tasks)
             wrote_tasks = True
+        settings_written = False
         try:
+            if renamed_settings != original_settings:
+                write_column_settings(renamed_settings)
+                settings_written = True
             write_board_columns(names)
         except OSError:
+            if settings_written:
+                write_column_settings(original_settings)
             # Keep the old ticket statuses if saving the column configuration fails.
             if wrote_tasks:
                 write_tasks_to_csv(original_tasks)
@@ -482,6 +603,10 @@ def apply_column_action(event: dict[str, object]) -> None:
         success, message = add_value("statuses", event["name"], "Column")
     elif event.get("action") == "move_column":
         success, message = move_board_column(event.get("status"), event.get("target"), event.get("position"))
+    elif event.get("action") == "sort_column" and isinstance(event.get("sort_by"), str):
+        success, message = set_column_options(event.get("status"), sort_by=event["sort_by"])
+    elif event.get("action") in {"archive_column", "restore_column"}:
+        success, message = set_column_options(event.get("status"), archived=event["action"] == "archive_column")
     else:
         success, message = False, "Invalid column change."
     st.session_state.board_save_result = {"event_id": event_id, "ok": success, "error": "" if success else message}
@@ -492,7 +617,8 @@ def reset_board_filters() -> None:
     st.session_state.filter_members = []
     st.session_state.filter_due = "Any date"
     st.session_state.filter_labels = []
-    st.session_state.status_filter = st.session_state.statuses.copy()
+    settings = load_column_settings()
+    st.session_state.status_filter = [name for name in st.session_state.statuses if not settings.get(name, {}).get("archived", False)]
 
 
 def task_matches_filters(
@@ -529,7 +655,10 @@ def task_matches_filters(
 
 def on_board_change() -> None:
     event = st.session_state.get("kanban_board")
-    if isinstance(event, dict) and event.get("action") in {"add_column", "move_column"}:
+    if isinstance(event, dict) and event.get("action") in {"archive_task", "restore_task"}:
+        apply_task_archive(event)
+        return
+    if isinstance(event, dict) and event.get("action") in {"add_column", "move_column", "sort_column", "archive_column", "restore_column"}:
         apply_column_action(event)
         return
     if isinstance(event, dict) and event.get("action") == "rename_column":
@@ -579,8 +708,9 @@ st.markdown(
         [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {
             display: none;
         }
+        [data-testid="stAppViewContainer"] { background: #f0faeb; }
         .block-container {
-            padding-top: 1.6rem;
+            padding-top: 1rem;
             padding-bottom: 2rem;
         }
         .app-brand-header {
@@ -595,16 +725,16 @@ st.markdown(
             gap: 0;
             flex: 0 0 auto;
             font-family: Inter, "Segoe UI", Arial, sans-serif;
-            font-size: 3rem;
+            font-size: 2.3rem;
             font-weight: 900;
             line-height: 1;
             letter-spacing: 0;
         }
         .app-brand-monogram-blue {
-            color: #0058c9;
+            color: #285b32;
         }
         .app-brand-monogram-green {
-            color: #168b00;
+            color: #659e4b;
             margin-left: -0.08em;
         }
         .app-brand-wordmark {
@@ -612,41 +742,16 @@ st.markdown(
             align-items: baseline;
             gap: 22px;
             font-family: Inter, "Segoe UI", Arial, sans-serif;
-            font-size: 2.35rem;
+            font-size: 1.8rem;
             font-weight: 800;
             line-height: 1;
             letter-spacing: 0;
         }
         .app-brand-project {
-            color: #0058c9;
+            color: #285b32;
         }
         .app-brand-planner {
-            color: #168b00;
-        }
-        .dashboard-strip {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(120px, 1fr));
-            gap: 8px;
-            margin: 8px 0 14px;
-        }
-        .dashboard-tile {
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 8px 10px;
-        }
-        .dashboard-label {
-            color: #64748b;
-            font-size: 0.72rem;
-            font-weight: 700;
-            line-height: 1.1;
-            margin-bottom: 3px;
-        }
-        .dashboard-value {
-            color: #0f172a;
-            font-size: 1.25rem;
-            font-weight: 800;
-            line-height: 1;
+            color: #659e4b;
         }
     </style>
     """,
@@ -1095,8 +1200,9 @@ def apply_new_task(event: dict) -> None:
                     raise ValueError(f"Invalid {field} value.")
             elif not isinstance(value, str):
                 raise ValueError(f"Invalid {field} value.")
-        if updates["status"] not in st.session_state.statuses:
-            raise ValueError("Choose an existing column.")
+        if (updates["status"] not in st.session_state.statuses
+                or load_column_settings().get(updates["status"], {}).get("archived", False)):
+            raise ValueError("Choose an active column.")
         if updates["due"]:
             date.fromisoformat(updates["due"])
         changes = event.get("label_changes", [])
@@ -1189,13 +1295,20 @@ def manage_people_emails_dialog() -> None:
 def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
     # Streamlit does not provide a native Planner-style drag-and-drop board, so
     # this function embeds a small self-contained HTML/CSS/JS app.
+    column_settings = load_column_settings()
+    labels = load_board_labels()
     board_tasks = [
         task | {"attachment_links": attachment_link_items(task.get("attachments", []))}
-        for task in tasks
+        for status in statuses
+        for task in sort_column_tasks(
+            [task for task in tasks if task["status"] == status],
+            column_settings.get(status, {}).get("sort", "default"), labels,
+        )
     ]
     board_data = {
         "statuses": statuses,
-        "labels": load_board_labels(),
+        "labels": labels,
+        "column_settings": column_settings,
         "users": st.session_state.users,
         "tasks": board_tasks,
     }
@@ -1954,11 +2067,52 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
         border-color: #2563eb;
         color: #ffffff;
     }}
+
+    body {{ background: #C1FEAC; color: #203b29; }}
+    .hint {{ color: #315a3d; padding: 10px 14px 0; font-size: 12px; }}
+    #save-error {{ margin: 0 14px; }}
+    #save-error:empty {{ display: none; }}
+    .board-wrap {{ padding: 0 12px 12px; box-sizing: border-box; scrollbar-color: #79ae68 #d6f6cc; }}
+    .board {{ column-gap: 12px; row-gap: 0; align-items: stretch; }}
+    .column-header {{ background: #eff5ec; border: 0; border-radius: 12px 12px 0 0; padding: 12px 10px; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 5px; box-shadow: none; color: #26462f; }}
+    .column-title {{ color: #26462f; font-weight: 700; font-size: 14px; }}
+    .column-count {{ background: #dfead9; color: #526a4e; border-radius: 20px; min-width: 21px; text-align: center; padding: 3px 5px; font-size: 11px; }}
+    .dropzone {{ background: #eff5ec; border: 0; border-radius: 0 0 12px 12px; padding: 0 8px 8px; min-height: 150px; }}
+    .task-card, .task-card.progress, .task-card.completed, .task-card.rejected {{ background: #fff; border: 1px solid #dae5d5; border-left: 1px solid #dae5d5; border-radius: 9px; padding: 12px; box-shadow: 0 1px 2px #24452218; margin-bottom: 8px; }}
+    .task-card:hover {{ border-color: #74a568; box-shadow: 0 3px 8px #24452224; }}
+    .task-title {{ font-size: 14px; line-height: 1.4; font-weight: 650; color: #243c2a; }}
+    .task-card summary {{ color: #5c745b; margin: 7px 0; }}
+    .task-summary {{ color: #617660; font-size: 11px; margin-top: 8px; }}
+    .task-assignees {{ margin-top: 8px; }}
+    .label-chip {{ font-size: 11px; padding: 4px 8px; border-radius: 4px; }}
+    .header-add-task, .column-actions-button {{ width: 28px; height: 28px; padding: 0; background: transparent; color: #486447; border: 0; border-radius: 6px; cursor: pointer; }}
+    .column-actions-button {{ font-size: 22px; line-height: 22px; }}
+    .header-add-task:hover, .column-actions-button:hover {{ background: #d6e9ce; }}
+    .column-add-task {{ border: 0; background: transparent; color: #52714c; border-radius: 7px; padding: 10px; text-align: left; }}
+    .column-add-task:hover {{ background: #dfeeda; }}
+    .add-column-header {{ background: #ffffff70; border: 1px dashed #82b66e; border-radius: 12px; box-shadow: none; }}
+    .add-column-button {{ color: #31572b; font-weight: 650; }}
+    .add-column-actions .primary, .modal-actions .primary {{ background: #2f6d35; border-color: #2f6d35; color: white; }}
+    .task-modal {{ border-radius: 14px; box-shadow: 0 24px 70px #19321a33; }}
+    .modal-backdrop {{ background: #183a204d; }}
+    .modal-actions .archive-task-button {{ margin-right: auto; color: #456043; background: #f0f6ec; border-color: #d8e5d2; }}
+    .creating-task .archive-task-button {{ display: none; }}
+    .column-actions-menu {{ position: fixed; z-index: 90; width: 260px; max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 12px; background: white; border: 1px solid #dce7d7; border-radius: 10px; box-shadow: 0 8px 28px #1d402d33; color: #2b4230; }}
+    .column-menu-heading {{ display: flex; justify-content: space-between; align-items: center; font-size: 14px; }}
+    .column-menu-heading button {{ background: transparent; border: 0; color: #577253; font-size: 20px; cursor: pointer; }}
+    .column-menu-caption {{ margin: 6px 0 10px; font-size: 11px; line-height: 1.5; color: #71826d; overflow-wrap: anywhere; }}
+    .column-menu-label {{ color: #687e63; font-size: 11px; font-weight: 700; margin: 12px 4px 6px; }}
+    .column-menu-option {{ display: block; width: 100%; border: 0; background: transparent; color: #355131; text-align: left; padding: 9px 8px; border-radius: 5px; cursor: pointer; font-size: 12px; }}
+    .column-menu-option:hover, .column-menu-option[aria-pressed="true"] {{ background: #e7f8df; }}
+    .column-menu-option.archive-column {{ margin-top: 10px; border-top: 1px solid #e4edde; border-radius: 0; }}
+    .column-menu-error {{ font-size: 12px; color: #b91c1c; }}
+    button:focus-visible, summary:focus-visible {{ outline: 2px solid #478038; outline-offset: 2px; }}
 </style>
 </head>
 <body>
 <p class="hint">Drag cards to change status. Drag column headers to reorder them, or click a title to rename it. Double-click a task to edit it.</p>
 <p id="save-error" role="alert" style="color: #b91c1c;"></p>
+<div id="column-actions-menu" class="column-actions-menu" hidden aria-label="Column actions"></div>
 <div class="board-wrap">
     <div id="board" class="board"></div>
 </div>
@@ -2047,6 +2201,7 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
             </aside>
         </div>
         <div class="modal-actions">
+            <button type="button" id="edit-archive" class="archive-task-button">Archive ticket</button>
             <button type="button" id="edit-cancel">Cancel</button>
             <span id="edit-save-error" role="alert" style="color: #b91c1c;"></span>
             <button type="button" id="edit-save" class="primary">Save changes</button>
@@ -2066,6 +2221,8 @@ let pendingColumnRename = null;
 let draggedColumn = null;
 let suppressColumnClickUntil = 0;
 let pendingColumnAdd = null;
+let pendingMenuAction = null;
+let columnMenuAnchor = null;
 
 
 let editingLabelIds = [];
@@ -2226,6 +2383,17 @@ window.addEventListener("message", event => {{
     if (!result || result.event_id !== pendingSaveId) return;
     pendingSaveId = null;
     board.style.pointerEvents = "";
+    if (pendingMenuAction) {{
+        const menu = pendingMenuAction;
+        pendingMenuAction = null;
+        menu.querySelectorAll("button").forEach(button => button.disabled = false);
+        if (result.ok) closeColumnMenu();
+        else {{
+            menu.querySelector("[role=alert]").textContent = result.error;
+            document.getElementById("save-error").textContent = result.error;
+        }}
+        return;
+    }}
     if (pendingColumnRename || pendingColumnAdd) {{
         const editor = pendingColumnRename || pendingColumnAdd;
         pendingColumnRename = null;
@@ -2629,6 +2797,105 @@ function createAddColumnHeader() {{
     board.appendChild(header);
 }}
 
+function closeColumnMenu() {{
+    const menu = document.getElementById("column-actions-menu");
+    menu.hidden = true;
+    if (columnMenuAnchor) columnMenuAnchor.setAttribute("aria-expanded", "false");
+}}
+function submitColumnAction(status, action, sortBy = null) {{
+    if (pendingSaveId) return;
+    pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
+    const menu = document.getElementById("column-actions-menu");
+    pendingMenuAction = menu;
+    menu.querySelectorAll("button").forEach(button => button.disabled = true);
+    menu.querySelector("[role=alert]").textContent = "";
+    document.getElementById("save-error").textContent = "";
+    board.style.pointerEvents = "none";
+    window.parent.postMessage({{type: "planner:column-action", value: {{event_id: pendingSaveId, action, status, sort_by: sortBy}}}}, "*");
+}}
+function openColumnMenu(status, anchor) {{
+    if (pendingSaveId) return;
+    const menu = document.getElementById("column-actions-menu");
+    if (!menu.hidden && columnMenuAnchor === anchor) {{ closeColumnMenu(); return; }}
+    closeColumnMenu();
+    columnMenuAnchor = anchor;
+    anchor.setAttribute("aria-expanded", "true");
+    menu.replaceChildren();
+    const heading = document.createElement("div");
+    heading.className = "column-menu-heading";
+    const title = document.createElement("strong");
+    title.textContent = "Column actions";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "Close column actions");
+    close.addEventListener("click", () => {{ closeColumnMenu(); anchor.focus(); }});
+    heading.append(title, close);
+    menu.appendChild(heading);
+    const caption = document.createElement("p");
+    caption.textContent = status;
+    caption.className = "column-menu-caption";
+    menu.appendChild(caption);
+    const sortHeading = document.createElement("div");
+    sortHeading.textContent = "Sort tickets";
+    sortHeading.className = "column-menu-label";
+    menu.appendChild(sortHeading);
+    const current = data.column_settings?.[status]?.sort || "default";
+    const group = document.createElement("div");
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Sort tickets");
+    for (const [value, name] of [["due", "Due date · earliest first"], ["responsible", "Responsible · A–Z"], ["label", "Label · A–Z"], ["default", "Default order"]]) {{
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "column-menu-option";
+        button.dataset.sort = value;
+        button.setAttribute("aria-pressed", String(value === current));
+        button.textContent = `${{value === current ? "✓ " : ""}}${{name}}`;
+        button.addEventListener("click", () => submitColumnAction(status, "sort_column", value));
+        group.appendChild(button);
+    }}
+    menu.appendChild(group);
+    const archive = document.createElement("button");
+    archive.type = "button";
+    archive.className = "column-menu-option archive-column";
+    archive.textContent = "Archive column";
+    archive.addEventListener("click", () => submitColumnAction(status, "archive_column"));
+    menu.appendChild(archive);
+    const note = document.createElement("p");
+    note.className = "column-menu-caption";
+    note.textContent = "Archived columns and their tickets stay saved. Restore them from Archived items.";
+    menu.appendChild(note);
+    const error = document.createElement("div");
+    error.setAttribute("role", "alert");
+    error.className = "column-menu-error";
+    menu.appendChild(error);
+    menu.hidden = false;
+    const rect = anchor.getBoundingClientRect();
+    menu.style.left = `${{Math.max(8, Math.min(rect.right - 260, window.innerWidth - 276))}}px`;
+    menu.style.top = `${{Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 8))}}px`;
+    group.querySelector("button").focus();
+}}
+function createColumnActionsButton(status) {{
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "column-actions-button";
+    button.textContent = "⋯";
+    button.title = "Column actions";
+    button.setAttribute("aria-label", `Column actions for ${{status}}`);
+    button.setAttribute("aria-controls", "column-actions-menu");
+    button.setAttribute("aria-expanded", "false");
+    button.addEventListener("click", event => {{ event.stopPropagation(); openColumnMenu(status, button); }});
+    return button;
+}}
+document.addEventListener("click", event => {{
+    if (!event.target.closest("#column-actions-menu, .column-actions-button")) closeColumnMenu();
+}});
+document.getElementById("column-actions-menu").addEventListener("keydown", event => {{
+    if (event.key === "Escape") {{ event.stopPropagation(); closeColumnMenu(); columnMenuAnchor?.focus(); }}
+}});
+document.querySelector(".board-wrap").addEventListener("scroll", closeColumnMenu);
+window.addEventListener("resize", closeColumnMenu);
+
 function createColumnHeader(status) {{
     const header = document.createElement("div");
     const taskCount = data.tasks.filter(task => task.status === status).length;
@@ -2638,7 +2905,7 @@ function createColumnHeader(status) {{
     header.title = "Drag to move this column; click its title to rename";
     header.addEventListener("dragstart", event => {{
         if (pendingSaveId || !header.querySelector(".column-title-input").hidden
-                || event.target.closest("input, .header-add-task")) {{
+                || event.target.closest("input, .header-add-task, .column-actions-button")) {{
             event.preventDefault();
             return;
         }}
@@ -2668,6 +2935,7 @@ function createColumnHeader(status) {{
     header.appendChild(title);
     header.appendChild(count);
     header.appendChild(createAddTaskButton(status, true));
+    header.appendChild(createColumnActionsButton(status));
     board.appendChild(header);
     return header;
 }}
@@ -3030,8 +3298,6 @@ function updateCardFromTask(card, task) {{
     card.className = cardClass(task.status);
     card.dataset.status = task.status;
     card.querySelector(".task-title").textContent = text(task.title);
-    card.querySelector(".project").textContent = text(task.project);
-    card.querySelector(".task-project-line").hidden = !task.project;
     const dueHistory = card.querySelector(".due-history");
     if (dueHistory) {{
         dueHistory.innerHTML = "";
@@ -3071,7 +3337,6 @@ function createTaskCard(task) {{
             </div>
         </details>
         <div class="task-summary">
-            <div class="task-project-line"><strong>Project:</strong> <span class="project"></span></div>
             <strong>Due:</strong> <span class="due-stack"><span class="due-history"></span><span class="due-current"></span></span>
         </div>
         <div class="task-assignees" role="group" aria-label="Responsible people"></div>
@@ -3267,6 +3532,14 @@ document.getElementById("comment-add").addEventListener("click", () => {{
     saveTaskMeta(task);
     renderActivity(task);
 }});
+document.getElementById("edit-archive").addEventListener("click", () => {{
+    if (!editingTaskId || newTaskDraft || pendingSaveId || attachmentReadPending) return;
+    pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
+    document.getElementById("edit-save").disabled = true;
+    document.getElementById("edit-save-error").textContent = "";
+    board.style.pointerEvents = "none";
+    window.parent.postMessage({{type: "planner:save", value: {{event_id: pendingSaveId, action: "archive_task", task_id: editingTaskId}}}}, "*");
+}});
 document.getElementById("edit-cancel").addEventListener("click", closeEditModal);
 document.getElementById("edit-save").addEventListener("click", saveEditedTask);
 modal.addEventListener("click", event => {{
@@ -3324,7 +3597,9 @@ if st.session_state.pop("show_task_created_notice", False):
     elif notification:
         st.warning(notification["message"])
 
-statuses = st.session_state.statuses
+column_settings = load_column_settings()
+statuses = [name for name in st.session_state.statuses if not column_settings.get(name, {}).get("archived", False)]
+archived_statuses = [name for name in st.session_state.statuses if column_settings.get(name, {}).get("archived", False)]
 if "status_filter" not in st.session_state:
     st.session_state.status_filter = statuses.copy()
 project_ids = st.session_state.project_ids
@@ -3338,6 +3613,42 @@ for project_id in project_ids:
 users = st.session_state.users
 
 toolbar_actions, toolbar_filters = st.columns([6, 1])
+with toolbar_actions:
+    archived_tickets = [task for task in st.session_state.tasks if task.get("archived", False)]
+    if archived_statuses or archived_tickets:
+        with st.popover("Archived items", icon=":material/archive:"):
+            archived_columns_tab, archived_tickets_tab = st.tabs(["Columns", "Tickets"])
+            with archived_columns_tab:
+                if not archived_statuses:
+                    st.caption("No archived columns.")
+                for archived_status in archived_statuses:
+                    column_tasks = [task for task in st.session_state.tasks if task["status"] == archived_status]
+                    with st.expander(f"{archived_status} · {len(column_tasks)} tasks"):
+                        for task in column_tasks:
+                            st.write(task["title"])
+                        if not column_tasks:
+                            st.caption("No tasks in this column.")
+                        if st.button("Restore column", key=f"restore_column_{archived_status}"):
+                            success, message = set_column_options(archived_status, archived=False)
+                            if success:
+                                st.rerun()
+                            st.error(message)
+            with archived_tickets_tab:
+                if not archived_tickets:
+                    st.caption("No archived tickets.")
+                for task in archived_tickets:
+                    with st.expander(task["title"]):
+                        st.caption(f"Column: {task['status']} · Due: {task['due'] or 'No date'}")
+                        st.write(task["description"])
+                        column_archived = task["status"] in archived_statuses
+                        if column_archived:
+                            st.caption("Restore its column before restoring this ticket.")
+                        if st.button("Restore ticket", key=f"restore_ticket_{task['id']}", disabled=column_archived):
+                            apply_task_archive({"event_id": uuid4().hex, "action": "restore_task", "task_id": task["id"]})
+                            result = st.session_state.board_save_result
+                            if result["ok"]:
+                                st.rerun()
+                            st.error(result["error"])
 with toolbar_filters:
     with st.popover("Filter", icon=":material/filter_list:", width="stretch"):
         st.markdown("**Filter**")
@@ -3359,16 +3670,10 @@ with toolbar_filters:
 filtered_tasks = [
     task | {"storage_key": task["id"]}
     for task in st.session_state.tasks
-    if task["status"] in selected_statuses
+    if not task.get("archived", False)
+    and task["status"] in statuses and task["status"] in selected_statuses
     and task_matches_filters(task, filter_keyword, filter_members, filter_due, labels=selected_labels)
 ]
-
-todo_tasks = [
-    task
-    for task in filtered_tasks
-    if task["status"] == "Backlog / To Do"
-]
-
 
 # Filters narrow cards; they must not remove saved columns from the board.
 visible_statuses = statuses.copy()
@@ -3380,29 +3685,4 @@ kanban_component(
     html=board_html, height=board_height(),
     save_result=st.session_state.get("board_save_result"),
     key="kanban_board", default=None, on_change=on_board_change,
-)
-
-project_count = len({task["project_id"] for task in filtered_tasks if task.get("project_id")})
-st.markdown(
-    f"""
-    <div class="dashboard-strip">
-        <div class="dashboard-tile">
-            <div class="dashboard-label">All tasks</div>
-            <div class="dashboard-value">{len(filtered_tasks)}</div>
-        </div>
-        <div class="dashboard-tile">
-            <div class="dashboard-label">Projects</div>
-            <div class="dashboard-value">{project_count}</div>
-        </div>
-        <div class="dashboard-tile">
-            <div class="dashboard-label">To Do</div>
-            <div class="dashboard-value">{len(todo_tasks)}</div>
-        </div>
-        <div class="dashboard-tile">
-            <div class="dashboard-label">Visible columns</div>
-            <div class="dashboard-value">{len(visible_statuses)}</div>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
 )
