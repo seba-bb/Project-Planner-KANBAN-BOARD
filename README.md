@@ -46,6 +46,12 @@ Click **Statistics**, immediately left of **Filter**, to open the statistics vie
 
 Charts include hover details and expandable data tables. Summary cards show task count, selected columns, assigned tasks, and tasks with labels. These are current snapshots; historical flow, throughput, and cycle-time charts require dated status history, which is not currently stored centrally.
 
+### Task Calendar
+
+Click **Calendar**, immediately before **Statistics** and **Filter**, to see tasks on their required completion (due) dates. Use **Previous month**, **Next month**, **Today**, or the date picker to select a month. Click a calendar task to expand its details; edit tickets from the board.
+
+Past due dates appear in red with an **Overdue** label. Dates from today through the next five days appear in yellow; later dates appear in green. The **Overdue tasks** list also includes earlier months, and tasks without a valid due date are listed separately. The calendar uses the application server's date and follows the board filters, excluding archived tickets and columns. All selected columns are included; filter to unfinished columns when reviewing outstanding work. **Back to board** keeps the current filters.
+
 ### Task Ownership
 
 Assign responsible people to individual tasks using email addresses. Edit a task to change its assignees or add a new email address directly in the selector.

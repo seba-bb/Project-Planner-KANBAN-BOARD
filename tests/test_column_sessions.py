@@ -1,5 +1,6 @@
 """Exercise actual Streamlit callbacks and filters using a test component bridge."""
 import json
+from datetime import date
 from pathlib import Path
 import re
 import shutil
@@ -17,6 +18,7 @@ class ColumnSessionTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         shutil.copy2(root / 'notifications.py', self.target / 'notifications.py')
         shutil.copy2(root / 'board_statistics.py', self.target / 'board_statistics.py')
+        shutil.copy2(root / 'board_calendar.py', self.target / 'board_calendar.py')
         shutil.copytree(root / 'assets', self.target / 'assets')
         source = (root / 'app.py').read_text(encoding='utf-8-sig')
         # AppTest cannot drive custom iframe widgets. Adapt only that transport to
@@ -164,6 +166,42 @@ def declare_test_component(*args, **kwargs):
         self.event(app, event_id='new-column', action='add_column', name='New active column')
         self.assertEqual(self.board(app)['statuses'], ['New active column'])
         self.assertEqual(app.session_state.statuses, original + ['New active column'])
+
+    def test_calendar_navigation_filtering_and_switching_views(self):
+        app = self.session()
+        original_csv = (self.target / 'project_planner_actions.csv').read_bytes()
+        toolbar_buttons = [button.key for button in app.button if button.key in {'toggle_calendar', 'toggle_statistics'}]
+        self.assertEqual(toolbar_buttons, ['toggle_calendar', 'toggle_statistics'])
+        app.multiselect(key='status_filter').set_value(['In Progress']).run(timeout=15)
+        expected = self.board(app)['tasks']
+        app.button(key='toggle_calendar').click().run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.button(key='toggle_calendar').label, 'Back to board')
+        app.date_input(key='calendar_jump').set_value(date(2026, 8, 15)).run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state.calendar_month, date(2026, 8, 1))
+        calendar_html = next(item.proto.body for item in app.get('html') if 'planner-calendar' in item.proto.body)
+        for task in expected:
+            self.assertIn(f'data-task-id="{task["id"]}"', calendar_html)
+        app.button(key='calendar_next').click().run(timeout=15)
+        self.assertEqual(app.session_state.calendar_month, date(2026, 9, 1))
+        app.button(key='calendar_previous').click().run(timeout=15)
+        self.assertEqual(app.session_state.calendar_month, date(2026, 8, 1))
+        app.button(key='calendar_today').click().run(timeout=15)
+        self.assertEqual(app.session_state.calendar_month, date.today().replace(day=1))
+        app.text_input(key='filter_keyword').set_value('no matching calendar ticket').run(timeout=15)
+        self.assertTrue(any('No tasks match' in info.value for info in app.info))
+        app.button(key='toggle_statistics').click().run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertFalse(app.session_state.show_calendar)
+        self.assertEqual(app.metric[0].value, '0')
+        app.button(key='toggle_calendar').click().run(timeout=15)
+        self.assertFalse(app.session_state.show_statistics)
+        app.button(key='toggle_calendar').click().run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.multiselect(key='status_filter').value, ['In Progress'])
+        self.assertEqual(app.text_input(key='filter_keyword').value, 'no matching calendar ticket')
+        self.assertEqual((self.target / 'project_planner_actions.csv').read_bytes(), original_csv)
 
 
 if __name__ == '__main__':

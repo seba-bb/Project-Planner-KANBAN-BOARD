@@ -16,6 +16,7 @@ from urllib.parse import quote, urlsplit
 
 from notifications import send_new_task_notification
 from board_statistics import render_statistics
+from board_calendar import render_calendar
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -3706,9 +3707,21 @@ users = st.session_state.users
 
 def toggle_statistics() -> None:
     st.session_state.show_statistics = not st.session_state.get("show_statistics", False)
+    st.session_state.show_calendar = False
 
 
-toolbar_space, toolbar_statistics, toolbar_filters = st.columns([5, 1.3, 1])
+def toggle_calendar() -> None:
+    st.session_state.show_calendar = not st.session_state.get("show_calendar", False)
+    st.session_state.show_statistics = False
+
+
+toolbar_space, toolbar_calendar, toolbar_statistics, toolbar_filters = st.columns([4, 1.3, 1.3, 1])
+with toolbar_calendar:
+    st.button(
+        "Back to board" if st.session_state.get("show_calendar", False) else "Calendar",
+        icon=":material/view_kanban:" if st.session_state.get("show_calendar", False) else ":material/calendar_month:",
+        key="toggle_calendar", on_click=toggle_calendar, width="stretch",
+    )
 with toolbar_statistics:
     st.button(
         "Back to board" if st.session_state.get("show_statistics", False) else "Statistics",
@@ -3740,6 +3753,10 @@ filtered_tasks = [
     and task["status"] in statuses and task["status"] in selected_statuses
     and task_matches_filters(task, filter_keyword, filter_members, filter_due, labels=selected_labels)
 ]
+
+if st.session_state.get("show_calendar", False):
+    render_calendar(filtered_tasks)
+    st.stop()
 
 if st.session_state.get("show_statistics", False):
     render_statistics(filtered_tasks, [status for status in statuses if status in selected_statuses], load_board_labels())
