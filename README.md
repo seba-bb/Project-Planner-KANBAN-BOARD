@@ -31,6 +31,8 @@ Click a column title to rename it directly in the header. Press **Enter** or cli
 
 Click **⋯** in a column header to open **Column actions**. Sort its tickets by **Due date** (earliest first), **Responsible** (email A–Z), or **Label** (name A–Z). Multiple assignees or labels are compared alphabetically, and missing values sort last. **Default order** restores the saved task order. Each column’s sort preference survives reloads and applies to new or edited tickets.
 
+While dragging a ticket, a small green gap shows its insertion position between cards, at the top, or at the bottom of a column. Drop to save that position, including moves within the same column. Manually placing a ticket in a sorted column switches that destination column to **Default order**, keeping its other tickets in their displayed order. The position survives reloads.
+
 **Archive column** hides the column and its tickets without deleting them or changing their assignments. Open **Archived items → Columns** above the board to restore it in its saved position, with its sorting preference intact. You can also open a ticket and choose **Archive ticket**. Restore individually archived tickets through **Archived items → Tickets**; restore their column first if it is archived too. Ticket IDs, labels, file references, and stored contents are retained. Archiving is available for existing tickets, after creation.
 
 ### Task Ownership
@@ -92,7 +94,7 @@ Old entries that contain only a filename without a saved file are marked unavail
 - **Labels:** `board_labels.json` stores shared label names and colors; the task CSV stores selected label IDs. Include both files in backups.
 - **Attachments:** File contents are stored in `attachments/<ticket-id>/`; the CSV stores their relative paths alongside web links and folder references. Include the attachments directory in backups.
 
-The application starts with sample tasks when no CSV task database exists. Saving a ticket writes its assignments and edited fields to the CSV; dragging a card saves its status. Saved changes survive page reloads. Existing CSV files receive stable ticket IDs automatically.
+The application starts with sample tasks when no CSV task database exists. Saving a ticket writes its assignments and edited fields to the CSV; dragging a card saves its status and position using CSV row order. Saved changes survive page reloads. Existing CSV files receive stable ticket IDs automatically.
 
 ## Email Notifications
 

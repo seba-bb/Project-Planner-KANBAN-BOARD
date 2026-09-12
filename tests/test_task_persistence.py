@@ -41,7 +41,7 @@ class TaskPersistenceTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1] / 'app.py'
         tree = ast.parse(source.read_text(encoding='utf-8-sig'))
         functions = {
-            'load_column_settings', 'write_column_settings', 'set_column_options', 'sort_column_tasks', 'apply_task_archive',
+            'load_column_settings', 'write_column_settings', 'set_column_options', 'sort_column_tasks', 'place_board_task', 'apply_task_archive',
             'save_uploaded_files', 'cleanup_uploaded_files', 'safe_storage_name', 'unique_file_path',
             'clean_attachment_link', 'local_folder_uri', 'upload_payload', 'attachment_link_items', 'add_task', 'apply_new_task',
             'merge_board_labels', 'load_board_labels', 'write_board_labels',
@@ -74,6 +74,81 @@ class TaskPersistenceTests(unittest.TestCase):
 
     def load(self):
         return self.namespace['load_tasks_from_csv']()
+
+    def move(self, task_id, status, before_id):
+        self.namespace['apply_board_edit'](dict(
+            task_id=task_id, event_id=uuid4().hex, updates={'status': status}, before_task_id=before_id,
+        ))
+
+    def seed_move_tasks(self):
+        task = self.load()[0]
+        tasks = [task | {'id': name, 'status': status, 'due': due} for name, status, due in [
+            ('ticket-a', 'Backlog / To Do', '2026-10-03'),
+            ('ticket-b', 'In Progress', '2026-10-02'),
+            ('ticket-c', 'Backlog / To Do', '2026-10-04'),
+            ('ticket-d', 'In Progress', '2026-10-01'),
+        ]]
+        self.namespace['write_tasks_to_csv'](tasks)
+        return tasks
+
+    def column_ids(self, status):
+        return [task['id'] for task in self.load() if task['status'] == status]
+
+    def test_drop_saves_position_between_tickets_and_keeps_other_data(self):
+        original = self.seed_move_tasks()
+        self.move('ticket-a', 'In Progress', 'ticket-d')
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.assertEqual(self.column_ids('In Progress'), ['ticket-b', 'ticket-a', 'ticket-d'])
+        self.assertEqual(self.column_ids('Backlog / To Do'), ['ticket-c'])
+        for saved in self.load():
+            expected = next(task for task in original if task['id'] == saved['id'])
+            self.assertEqual(saved, expected | {'status': saved['status']})
+
+    def test_drop_at_top_bottom_same_column_and_empty_column(self):
+        self.seed_move_tasks()
+        for status, anchor, expected in [
+            ('In Progress', 'ticket-b', ['ticket-a', 'ticket-b', 'ticket-d']),
+            ('In Progress', None, ['ticket-b', 'ticket-d', 'ticket-a']),
+            ('In Progress', 'ticket-d', ['ticket-b', 'ticket-a', 'ticket-d']),
+            ('Completed', None, ['ticket-a']),
+        ]:
+            self.move('ticket-a', status, anchor)
+            self.assertTrue(self.state.board_save_result['ok'])
+            self.assertEqual(self.column_ids(status), expected)
+
+    def test_manual_drop_preserves_sorted_neighbors_and_latest_hidden_tasks(self):
+        tasks = self.seed_move_tasks()
+        tasks.append(tasks[0] | {'id': 'hidden-new', 'status': 'In Progress', 'due': '2026-10-05'})
+        self.namespace['write_tasks_to_csv'](tasks)
+        self.namespace['write_column_settings']({'In Progress': {'sort': 'due', 'archived': False}})
+        self.move('ticket-a', 'In Progress', 'ticket-b')
+        self.assertTrue(self.state.board_save_result['ok'])
+        self.assertEqual(self.column_ids('In Progress'), ['ticket-d', 'ticket-a', 'ticket-b', 'hidden-new'])
+        self.assertEqual(self.namespace['load_column_settings']()['In Progress'], {'sort': 'default', 'archived': False})
+
+    def test_stale_or_invalid_drop_target_does_not_save(self):
+        tasks = self.seed_move_tasks()
+        tasks.append(tasks[0] | {'id': 'archived', 'status': 'In Progress', 'archived': True})
+        self.namespace['write_tasks_to_csv'](tasks)
+        original = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        for anchor in ['missing', 'ticket-a', 'ticket-c', 'archived', [], 3]:
+            self.move('ticket-a', 'In Progress', anchor)
+            self.assertFalse(self.state.board_save_result['ok'])
+            self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original)
+        self.move('ticket-a', 'Deleted column', None)
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original)
+
+    def test_failed_move_restores_sort_and_leaves_csv_unchanged(self):
+        self.seed_move_tasks()
+        self.namespace['write_column_settings']({'In Progress': {'sort': 'due'}})
+        original = self.namespace['TASK_DATABASE_CSV'].read_bytes()
+        settings = self.namespace['load_column_settings']()
+        with patch.dict(self.namespace, write_tasks_to_csv=lambda tasks: (_ for _ in ()).throw(OSError('Disk full'))):
+            self.move('ticket-a', 'In Progress', 'ticket-b')
+        self.assertFalse(self.state.board_save_result['ok'])
+        self.assertEqual(self.namespace['TASK_DATABASE_CSV'].read_bytes(), original)
+        self.assertEqual(self.namespace['load_column_settings'](), settings)
 
     def test_assignees_survive_fresh_load_and_status_move(self):
         emails = ['first@example.com', 'anna.nowak@example.com']

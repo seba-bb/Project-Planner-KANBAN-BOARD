@@ -311,17 +311,34 @@ def apply_board_edit(event: object) -> None:
             task["labels"] = list(dict.fromkeys(task["labels"]))
             if set(task["labels"]) - {label["id"] for label in labels}:
                 raise ValueError("A selected label no longer exists. Reload the board.")
+        previous_settings = load_column_settings()
+        settings = previous_settings
+        if "before_task_id" in event:
+            columns = load_board_columns() if BOARD_COLUMNS_JSON.exists() else st.session_state.statuses
+            if task["status"] not in columns:
+                raise ValueError("This column no longer exists. Reload the board.")
+            tasks = place_board_task(tasks, task, event["before_task_id"], previous_settings, labels)
+            if previous_settings.get(task["status"], {}).get("sort", "default") != "default":
+                settings = previous_settings | {
+                    task["status"]: previous_settings[task["status"]] | {"sort": "default"},
+                }
         saved_files = save_uploaded_files(task["id"], event.get("uploaded_files", []))
         task["attachments"] = list(dict.fromkeys(task.get("attachments", []) + saved_files))
         labels_changed = labels != previous_labels
         labels_written = False
+        settings_written = False
         try:
             if labels_changed:
                 write_board_labels(labels)
                 labels_written = True
+            if settings != previous_settings:
+                write_column_settings(settings)
+                settings_written = True
             write_tasks_to_csv(tasks)
         except OSError:
             cleanup_uploaded_files(saved_files)
+            if settings_written:
+                write_column_settings(previous_settings)
             if labels_written:
                 write_board_labels(previous_labels)
             raise
@@ -507,6 +524,27 @@ def sort_column_tasks(tasks: list[dict], sort_by: str, labels: list[dict]) -> li
         return (not values, tuple(values))
 
     return sorted(tasks, key=key)
+
+
+def place_board_task(tasks: list[dict], task: dict, before_id: object, settings: dict, labels: list[dict]) -> list[dict]:
+    """Persist a drop relative to a saved ticket, retaining filtered-out tickets too."""
+    if before_id is not None and (not isinstance(before_id, str) or before_id == task["id"]):
+        raise ValueError("Invalid ticket position. Reload the board.")
+    destination = sort_column_tasks(
+        [item for item in tasks if item["status"] == task["status"]
+         and item["id"] != task["id"] and not item.get("archived", False)],
+        settings.get(task["status"], {}).get("sort", "default"), labels,
+    )
+    index = len(destination)
+    if before_id is not None:
+        index = next((i for i, item in enumerate(destination) if item["id"] == before_id), -1)
+        if index < 0:
+            raise ValueError("The ticket at this position has moved or been archived. Reload the board and try again.")
+    destination.insert(index, task)
+    destination_ids = {item["id"] for item in destination}
+    # Replace only destination slots; other columns and archived rows keep their order.
+    ordered = iter(destination)
+    return [next(ordered) if item["id"] in destination_ids else item for item in tasks]
 
 
 def rename_board_columns(new_names: list[str]) -> tuple[bool, str]:
@@ -1516,8 +1554,20 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
         transition: background 120ms ease, border-color 120ms ease;
     }}
     .dropzone.drag-over {{
-        background: #eef6ff;
-        border-color: #2563eb;
+        background: #e3f4da;
+        border-color: #78b462;
+    }}
+    .task-drop-gap {{
+        flex: 0 0 18px;
+        box-sizing: border-box;
+        margin-bottom: 9px;
+        border: 1px dashed #78b462;
+        border-radius: 6px;
+        background: #c1feac80;
+        pointer-events: none;
+    }}
+    .task-card.task-dragging {{
+        opacity: 0.45;
     }}
     .task-card {{
         flex-shrink: 0;
@@ -2357,7 +2407,7 @@ document.addEventListener("click", event => {{
     if (!document.getElementById("task-label-section").contains(event.target)) setLabelsOpen(false);
 }});
 
-function persistTask(task, updates, labelChanges = [], uploadedFiles = []) {{
+function persistTask(task, updates, labelChanges = [], uploadedFiles = [], placement = {{}}) {{
     if (pendingSaveId) return;
     pendingSaveId = globalThis.crypto?.randomUUID?.() || `${{Date.now()}}-${{Math.random().toString(36).slice(2)}}`;
     document.getElementById("save-error").textContent = "";
@@ -2366,7 +2416,7 @@ function persistTask(task, updates, labelChanges = [], uploadedFiles = []) {{
     document.getElementById("edit-save").textContent = "Saving…";
     board.style.pointerEvents = "none";
     window.parent.postMessage({{
-        type: "planner:save", value: {{event_id: pendingSaveId, action: newTaskDraft ? "create_task" : "edit_task", task_id: task.id, updates, label_changes: labelChanges, uploaded_files: uploadedFiles}},
+        type: "planner:save", value: {{event_id: pendingSaveId, action: newTaskDraft ? "create_task" : "edit_task", task_id: task.id, updates, label_changes: labelChanges, uploaded_files: uploadedFiles, ...placement}},
     }}, "*");
 }}
 
@@ -3344,14 +3394,52 @@ function createTaskCard(task) {{
     updateCardFromTask(card, task);
 
     card.addEventListener("dragstart", event => {{
+        if (pendingSaveId) {{ event.preventDefault(); return; }}
+        clearTaskDrag();
+        closeColumnMenu();
         draggedId = card.id;
+        card.classList.add("task-dragging");
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", card.id);
     }});
+    card.addEventListener("dragend", clearTaskDrag);
     card.addEventListener("dblclick", () => openEditModal(card.id));
 
     return card;
 }}
+
+const taskDropGap = document.createElement("div");
+taskDropGap.className = "task-drop-gap";
+taskDropGap.setAttribute("aria-hidden", "true");
+
+function clearTaskDropGap() {{
+    taskDropGap.remove();
+    board.querySelectorAll(".dropzone.drag-over").forEach(zone => zone.classList.remove("drag-over"));
+}}
+
+function clearTaskDrag() {{
+    clearTaskDropGap();
+    board.querySelectorAll(".task-dragging").forEach(card => card.classList.remove("task-dragging"));
+    draggedId = null;
+}}
+
+function taskDropTarget(zone, clientY) {{
+    // Measure without the gap so its own height cannot make the target oscillate.
+    taskDropGap.remove();
+    return Array.from(zone.querySelectorAll(".task-card"))
+        .filter(card => card.id !== draggedId)
+        .find(card => {{
+            const rect = card.getBoundingClientRect();
+            return clientY < rect.top + rect.height / 2;
+        }}) || null;
+}}
+
+document.addEventListener("dragover", event => {{
+    if (draggedId && !event.target.closest?.(".dropzone")) clearTaskDropGap();
+}});
+document.addEventListener("dragleave", event => {{
+    if (!event.relatedTarget) clearTaskDropGap();
+}});
 
 function createDropzone(status) {{
     const zone = document.createElement("div");
@@ -3359,22 +3447,25 @@ function createDropzone(status) {{
     zone.dataset.status = status;
 
     zone.addEventListener("dragover", event => {{
-        if (draggedColumn) return;
+        if (draggedColumn || !draggedId || pendingSaveId) return;
         event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        clearTaskDropGap();
+        const target = taskDropTarget(zone, event.clientY);
+        zone.insertBefore(taskDropGap, target || zone.querySelector(".column-add-task"));
         zone.classList.add("drag-over");
     }});
-    zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+    zone.addEventListener("dragleave", event => {{
+        if (!zone.contains(event.relatedTarget) && taskDropGap.parentElement === zone) clearTaskDropGap();
+    }});
     zone.addEventListener("drop", event => {{
-        if (draggedColumn) return;
+        if (draggedColumn || !draggedId || pendingSaveId) return;
         event.preventDefault();
-        zone.classList.remove("drag-over");
-        const cardId = event.dataTransfer.getData("text/plain") || draggedId;
-        const card = document.getElementById(cardId);
-        if (!card) return;
-
-        const task = findTask(cardId);
+        const task = findTask(draggedId);
+        const target = taskDropTarget(zone, event.clientY);
+        clearTaskDrag();
         if (!task) return;
-        persistTask(task, {{status}});
+        persistTask(task, {{status}}, [], [], {{before_task_id: target?.id || null}});
     }});
 
     enableColumnDrop(zone, status);

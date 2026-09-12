@@ -108,6 +108,22 @@ def declare_test_component(*args, **kwargs):
         self.assertIn(task_id, [task['id'] for task in self.board(app)['tasks']])
         self.assertFalse(any('dashboard-strip' in element.value for element in app.markdown))
 
+    def test_drag_position_survives_component_rerender_and_fresh_session(self):
+        app = self.session()
+        status = 'In Progress'
+        self.event(app, event_id='sort', action='sort_column', status=status, sort_by='due')
+        board = self.board(app)
+        moving = next(task for task in board['tasks'] if task['status'] != status)
+        neighbors = [task['id'] for task in board['tasks'] if task['status'] == status]
+        self.assertGreaterEqual(len(neighbors), 2)
+        self.event(app, event_id='drop', action='edit_task', task_id=moving['id'],
+                   updates={'status': status}, before_task_id=neighbors[1])
+        expected = [neighbors[0], moving['id'], *neighbors[1:]]
+        for session in (app, self.session()):
+            saved = self.board(session)
+            self.assertEqual([task['id'] for task in saved['tasks'] if task['status'] == status], expected)
+            self.assertEqual(saved['column_settings'][status]['sort'], 'default')
+
     def test_archiving_all_columns_does_not_lose_them_or_prevent_adding_a_new_one(self):
         app = self.session()
         original = app.session_state.statuses.copy()
