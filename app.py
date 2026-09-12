@@ -15,6 +15,7 @@ from io import StringIO
 from urllib.parse import quote, urlsplit
 
 from notifications import send_new_task_notification
+from board_statistics import render_statistics
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -3703,43 +3704,17 @@ for project_id in project_ids:
     st.session_state.project_colors.setdefault(project_id, default_project_color(project_id))
 users = st.session_state.users
 
-toolbar_actions, toolbar_filters = st.columns([6, 1])
-with toolbar_actions:
-    archived_tickets = [task for task in st.session_state.tasks if task.get("archived", False)]
-    if archived_statuses or archived_tickets:
-        with st.popover("Archived items", icon=":material/archive:"):
-            archived_columns_tab, archived_tickets_tab = st.tabs(["Columns", "Tickets"])
-            with archived_columns_tab:
-                if not archived_statuses:
-                    st.caption("No archived columns.")
-                for archived_status in archived_statuses:
-                    column_tasks = [task for task in st.session_state.tasks if task["status"] == archived_status]
-                    with st.expander(f"{archived_status} · {len(column_tasks)} tasks"):
-                        for task in column_tasks:
-                            st.write(task["title"])
-                        if not column_tasks:
-                            st.caption("No tasks in this column.")
-                        if st.button("Restore column", key=f"restore_column_{archived_status}"):
-                            success, message = set_column_options(archived_status, archived=False)
-                            if success:
-                                st.rerun()
-                            st.error(message)
-            with archived_tickets_tab:
-                if not archived_tickets:
-                    st.caption("No archived tickets.")
-                for task in archived_tickets:
-                    with st.expander(task["title"]):
-                        st.caption(f"Column: {task['status']} · Due: {task['due'] or 'No date'}")
-                        st.write(task["description"])
-                        column_archived = task["status"] in archived_statuses
-                        if column_archived:
-                            st.caption("Restore its column before restoring this ticket.")
-                        if st.button("Restore ticket", key=f"restore_ticket_{task['id']}", disabled=column_archived):
-                            apply_task_archive({"event_id": uuid4().hex, "action": "restore_task", "task_id": task["id"]})
-                            result = st.session_state.board_save_result
-                            if result["ok"]:
-                                st.rerun()
-                            st.error(result["error"])
+def toggle_statistics() -> None:
+    st.session_state.show_statistics = not st.session_state.get("show_statistics", False)
+
+
+toolbar_space, toolbar_statistics, toolbar_filters = st.columns([5, 1.3, 1])
+with toolbar_statistics:
+    st.button(
+        "Back to board" if st.session_state.get("show_statistics", False) else "Statistics",
+        icon=":material/view_kanban:" if st.session_state.get("show_statistics", False) else ":material/bar_chart:",
+        key="toggle_statistics", on_click=toggle_statistics, width="stretch",
+    )
 with toolbar_filters:
     with st.popover("Filter", icon=":material/filter_list:", width="stretch"):
         st.markdown("**Filter**")
@@ -3766,6 +3741,10 @@ filtered_tasks = [
     and task_matches_filters(task, filter_keyword, filter_members, filter_due, labels=selected_labels)
 ]
 
+if st.session_state.get("show_statistics", False):
+    render_statistics(filtered_tasks, [status for status in statuses if status in selected_statuses], load_board_labels())
+    st.stop()
+
 # Filters narrow cards; they must not remove saved columns from the board.
 visible_statuses = statuses.copy()
 board_html = build_board_html(visible_statuses, filtered_tasks)
@@ -3777,3 +3756,39 @@ kanban_component(
     save_result=st.session_state.get("board_save_result"),
     key="kanban_board", default=None, on_change=on_board_change,
 )
+
+# Recovery controls sit below the board.
+archived_tickets = [task for task in st.session_state.tasks if task.get("archived", False)]
+with st.popover("Archived items", icon=":material/archive:"):
+    archived_columns_tab, archived_tickets_tab = st.tabs(["Columns", "Tickets"])
+    with archived_columns_tab:
+        if not archived_statuses:
+            st.caption("No archived columns.")
+        for archived_status in archived_statuses:
+            column_tasks = [task for task in st.session_state.tasks if task["status"] == archived_status]
+            with st.expander(f"{archived_status} · {len(column_tasks)} tasks"):
+                for task in column_tasks:
+                    st.write(task["title"])
+                if not column_tasks:
+                    st.caption("No tasks in this column.")
+                if st.button("Restore column", key=f"restore_column_{archived_status}"):
+                    success, message = set_column_options(archived_status, archived=False)
+                    if success:
+                        st.rerun()
+                    st.error(message)
+    with archived_tickets_tab:
+        if not archived_tickets:
+            st.caption("No archived tickets.")
+        for task in archived_tickets:
+            with st.expander(task["title"]):
+                st.caption(f"Column: {task['status']} · Due: {task['due'] or 'No date'}")
+                st.write(task["description"])
+                column_archived = task["status"] in archived_statuses
+                if column_archived:
+                    st.caption("Restore its column before restoring this ticket.")
+                if st.button("Restore ticket", key=f"restore_ticket_{task['id']}", disabled=column_archived):
+                    apply_task_archive({"event_id": uuid4().hex, "action": "restore_task", "task_id": task["id"]})
+                    result = st.session_state.board_save_result
+                    if result["ok"]:
+                        st.rerun()
+                    st.error(result["error"])

@@ -16,6 +16,7 @@ class ColumnSessionTests(unittest.TestCase):
         self.target = Path(self.directory.name)
         root = Path(__file__).resolve().parents[1]
         shutil.copy2(root / 'notifications.py', self.target / 'notifications.py')
+        shutil.copy2(root / 'board_statistics.py', self.target / 'board_statistics.py')
         shutil.copytree(root / 'assets', self.target / 'assets')
         source = (root / 'app.py').read_text(encoding='utf-8-sig')
         # AppTest cannot drive custom iframe widgets. Adapt only that transport to
@@ -123,6 +124,35 @@ def declare_test_component(*args, **kwargs):
             saved = self.board(session)
             self.assertEqual([task['id'] for task in saved['tasks'] if task['status'] == status], expected)
             self.assertEqual(saved['column_settings'][status]['sort'], 'default')
+
+    def test_statistics_navigation_filters_and_archive_control_position(self):
+        app = self.session()
+        # The archive control is rendered after the board's component transport.
+        elements = list(app.main)
+        board_index = next(i for i, element in enumerate(elements) if getattr(element, 'key', None) == 'test_board_event')
+        archive_index = next(i for i, element in enumerate(elements) if element.type == 'popover' and element.proto.popover.label == 'Archived items')
+        self.assertGreater(archive_index, board_index)
+        original_csv = (self.target / 'project_planner_actions.csv').read_bytes()
+        app.multiselect(key='status_filter').set_value(['In Progress']).run(timeout=15)
+        expected = len(self.board(app)['tasks'])
+        app.button(key='toggle_statistics').click().run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.button(key='toggle_statistics').label, 'Back to board')
+        self.assertEqual(app.metric[0].value, str(expected))
+        self.assertEqual(len(app.get('vega_lite_chart')), 4)
+        self.assertEqual(len(app.text_input(key='filter_keyword').value), 0)
+        self.assertFalse(any(element.key == 'test_board_event' for element in app.text_input))
+        app.text_input(key='filter_keyword').set_value('no matching ticket xyz').run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.metric[0].value, '0')
+        self.assertEqual(len(app.get('vega_lite_chart')), 0)
+        self.assertTrue(any('No tasks match' in info.value for info in app.info))
+        app.button(key='toggle_statistics').click().run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.multiselect(key='status_filter').value, ['In Progress'])
+        self.assertEqual(app.text_input(key='filter_keyword').value, 'no matching ticket xyz')
+        self.assertEqual(self.board(app)['tasks'], [])
+        self.assertEqual((self.target / 'project_planner_actions.csv').read_bytes(), original_csv)
 
     def test_archiving_all_columns_does_not_lose_them_or_prevent_adding_a_new_one(self):
         app = self.session()

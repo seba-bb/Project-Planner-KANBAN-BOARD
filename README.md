@@ -33,7 +33,18 @@ Click **⋯** in a column header to open **Column actions**. Sort its tickets by
 
 While dragging a ticket, a small green gap shows its insertion position between cards, at the top, or at the bottom of a column. Drop to save that position, including moves within the same column. Manually placing a ticket in a sorted column switches that destination column to **Default order**, keeping its other tickets in their displayed order. The position survives reloads.
 
-**Archive column** hides the column and its tickets without deleting them or changing their assignments. Open **Archived items → Columns** above the board to restore it in its saved position, with its sorting preference intact. You can also open a ticket and choose **Archive ticket**. Restore individually archived tickets through **Archived items → Tickets**; restore their column first if it is archived too. Ticket IDs, labels, file references, and stored contents are retained. Archiving is available for existing tickets, after creation.
+**Archive column** hides the column and its tickets without deleting them or changing their assignments. Open **Archived items → Columns** below the board to restore it in its saved position, with its sorting preference intact. You can also open a ticket and choose **Archive ticket**. Restore individually archived tickets through **Archived items → Tickets**; restore their column first if it is archived too. Ticket IDs, labels, file references, and stored contents are retained. Archiving is available for existing tickets, after creation.
+
+### Board Statistics
+
+Click **Statistics**, immediately left of **Filter**, to open the statistics view. **Back to board** returns to the Kanban board. Both views share the same filters and exclude archived tickets and columns.
+
+- **Tasks by column:** task distribution across the selected columns, including empty columns.
+- **Due-date overview:** overdue, due today, due in 1–5 days, later, and missing or invalid dates. All selected columns are included; filter to unfinished columns when reviewing outstanding deadlines.
+- **Workload by responsible person:** each shared ticket counts once for each responsible person; unassigned tickets appear separately.
+- **Tasks by label:** each ticket counts once for each selected label, with unlabelled tickets grouped separately.
+
+Charts include hover details and expandable data tables. Summary cards show task count, selected columns, assigned tasks, and tasks with labels. These are current snapshots; historical flow, throughput, and cycle-time charts require dated status history, which is not currently stored centrally.
 
 ### Task Ownership
 
