@@ -1692,6 +1692,15 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
         margin: 0 0 10px;
     }}
     .attachment-actions {{ display: flex; gap: 8px; margin: 6px 0; }}
+    .details-dropzone {{ border: 2px dashed transparent; border-radius: 8px; padding: 6px; transition: background 120ms ease, border-color 120ms ease; }}
+    .details-dropzone.file-drag-over {{ border-color: #659e4b; background: #c1feac66; }}
+    #details-upload-status {{ font-size: 12px; color: #285b32; margin-top: 4px; }}
+    .details-image-previews {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 8px; }}
+    .details-image-preview {{ padding: 4px; border: 1px solid #c3dcb8; background: #fff; border-radius: 6px; cursor: zoom-in; }}
+    .details-image-preview img {{ display: block; width: 100%; height: 120px; object-fit: contain; }}
+    .details-image-preview.expanded {{ grid-column: 1 / -1; cursor: zoom-out; }}
+    .details-image-preview.expanded img {{ height: auto; max-height: 550px; }}
+    .details-image-preview:focus-visible {{ outline: 2px solid #659e4b; outline-offset: 2px; }}
     .attachment-actions button, #attachment-link-apply {{ border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #334155; padding: 6px 10px; cursor: pointer; }}
     .attachment-row {{ display: flex; align-items: center; gap: 10px; padding: 5px 0; }}
     .attachment-row > :first-child {{ flex: 1; min-width: 0; }}
@@ -2196,7 +2205,12 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
                             <p class="modal-note">Labels and selections are saved with the task. Editing a label updates it across the board.</p>
                         </section>
                     </div>
-                    <label>Details<textarea id="edit-description"></textarea></label>
+                    <div id="details-dropzone" class="details-dropzone">
+                        <label>Details<textarea id="edit-description" aria-describedby="details-upload-hint"></textarea></label>
+                        <div id="details-upload-hint" class="modal-note">Drop files here or paste a picture into Details (Ctrl+V / ⌘V). Save the task to keep them.</div>
+                        <div id="details-upload-status" role="status" aria-live="polite"></div>
+                        <div id="details-image-previews" class="details-image-previews" aria-label="Attached pictures"></div>
+                    </div>
                     <div class="field-label">Responsible people
                         <div class="responsible-multiselect" id="edit-responsible-people">
                             <div id="responsible-control" class="responsible-control" tabindex="0" role="button" aria-expanded="false">
@@ -3093,6 +3107,25 @@ function renderEditingAttachments() {{
         else editingUploads.splice(index - editingAttachments.length, 1);
         renderEditingAttachments();
     }});
+    const previews = document.getElementById("details-image-previews");
+    previews.replaceChildren();
+    all.filter(item => /^data:image[/](png|jpeg|gif|webp);base64,/i.test(item.href || "")).forEach(item => {{
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "details-image-preview";
+        button.setAttribute("aria-label", `Enlarge ${{item.name}}`);
+        button.setAttribute("aria-expanded", "false");
+        const picture = document.createElement("img");
+        picture.src = item.href;
+        picture.alt = item.name;
+        button.appendChild(picture);
+        button.addEventListener("click", () => {{
+            const expanded = button.classList.toggle("expanded");
+            button.setAttribute("aria-expanded", String(expanded));
+            button.setAttribute("aria-label", `${{expanded ? "Shrink" : "Enlarge"}} ${{item.name}}`);
+        }});
+        previews.appendChild(button);
+    }});
 }}
 function folderUri(value) {{
     if (/^[a-z]:[\\\\/]/i.test(value)) return "file:///" + encodeURI(value.replace(/\\\\/g, "/")).replace(/#/g, "%23").replace(/\\?/g, "%3F");
@@ -3145,36 +3178,83 @@ document.getElementById("attachment-link-input").addEventListener("keydown", eve
     if (event.key === "Enter") {{ event.preventDefault(); addAttachmentLink(); }}
 }});
 document.getElementById("attachment-upload").addEventListener("click", () => document.getElementById("edit-uploaded-files").click());
-document.getElementById("edit-uploaded-files").addEventListener("change", async event => {{
-    const files = Array.from(event.target.files);
+function setUploadStatus(message) {{
+    document.getElementById("attachment-error").textContent = message;
+    document.getElementById("details-upload-status").textContent = message;
+}}
+async function addUploadedFiles(files) {{
+    if (!files.length || !modal.classList.contains("open")) return;
+    if (attachmentReadPending || pendingSaveId) {{
+        setUploadStatus("Please wait for the current files or save to finish, then try again.");
+        return;
+    }}
     const session = attachmentSession;
-    const error = document.getElementById("attachment-error");
-    error.textContent = "";
     if (files.length + editingUploads.length > 50 || [...files, ...editingUploads].reduce((sum, file) => sum + file.size, 0) > 20 * 1024 * 1024) {{
-        error.textContent = "Choose up to 50 files, totaling 20 MB or less per save.";
-        event.target.value = "";
+        setUploadStatus("Choose up to 50 files, totaling 20 MB or less per save.");
         return;
     }}
     attachmentReadPending = true;
     document.getElementById("edit-save").disabled = true;
     document.getElementById("attachment-upload").disabled = true;
-    error.textContent = "Reading files…";
+    setUploadStatus("Reading files…");
     try {{
         const uploads = await Promise.all(files.map(readUpload));
         if (session !== attachmentSession) return;
         editingUploads.push(...uploads);
-        error.textContent = "";
+        setUploadStatus("");
+        document.getElementById("details-upload-status").textContent = `${{uploads.length}} file(s) added. Save the task to keep them.`;
         renderEditingAttachments();
     }} catch (failure) {{
-        if (session === attachmentSession) error.textContent = failure.message;
+        if (session === attachmentSession) setUploadStatus(failure.message);
     }} finally {{
         if (session === attachmentSession) {{
             attachmentReadPending = false;
             document.getElementById("edit-save").disabled = Boolean(pendingSaveId);
             document.getElementById("attachment-upload").disabled = false;
-            event.target.value = "";
         }}
     }}
+}}
+document.getElementById("edit-uploaded-files").addEventListener("change", event => {{
+    const files = Array.from(event.target.files);
+    event.target.value = "";
+    addUploadedFiles(files);
+}});
+const detailsDropzone = document.getElementById("details-dropzone");
+function isFileDrag(event) {{
+    return Array.from(event.dataTransfer?.types || []).includes("Files");
+}}
+modal.addEventListener("dragover", event => {{
+    if (!modal.classList.contains("open") || !isFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    detailsDropzone.classList.add("file-drag-over");
+}});
+modal.addEventListener("dragleave", event => {{
+    if (!modal.contains(event.relatedTarget)) detailsDropzone.classList.remove("file-drag-over");
+}});
+modal.addEventListener("drop", event => {{
+    if (!modal.classList.contains("open") || !isFileDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    detailsDropzone.classList.remove("file-drag-over");
+    const items = Array.from(event.dataTransfer.items || []);
+    if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) {{
+        setUploadStatus("Drop individual files. To attach a folder, use Add link.");
+        return;
+    }}
+    const files = Array.from(event.dataTransfer.files || []);
+    if (!files.length) setUploadStatus("No readable files were dropped. Try Upload file instead.");
+    else addUploadedFiles(files);
+}});
+detailsDropzone.addEventListener("paste", event => {{
+    const clipboard = event.clipboardData;
+    const imageItems = Array.from(clipboard?.items || []).filter(item => item.kind === "file" && item.type.startsWith("image/"));
+    const files = imageItems.length ? imageItems.map(item => item.getAsFile()).filter(Boolean)
+        : Array.from(clipboard?.files || []).filter(file => file.type.startsWith("image/"));
+    if (!files.length) return;
+    event.preventDefault();
+    addUploadedFiles(files);
 }});
 
 function taskStoreKey(task) {{
@@ -3511,6 +3591,8 @@ function openEditModal(taskId, draft = null) {{
     document.getElementById("attachment-link-input").value = "";
     document.getElementById("attachment-link-form").hidden = true;
     document.getElementById("attachment-error").textContent = "";
+    document.getElementById("details-upload-status").textContent = "";
+    detailsDropzone.classList.remove("file-drag-over");
     renderEditingAttachments();
     document.getElementById("edit-uploaded-files").value = "";
     document.getElementById("checklist-new-item").value = "";
@@ -3525,6 +3607,7 @@ function openEditModal(taskId, draft = null) {{
 
 function closeEditModal() {{
     attachmentSession += 1;
+    detailsDropzone.classList.remove("file-drag-over");
     editingTaskId = null;
     newTaskDraft = null;
     setLabelsOpen(false);

@@ -76,6 +76,8 @@ Selected labels appear directly below the title and above Details on cards. Unch
 
 Inside a task, use **Add link** for an HTTP/HTTPS address or an absolute folder path such as `C:\Program Files`, `\\server\share`, or `/srv/shared`. Use **Upload file** to select files from your computer (up to 50 files and 20 MB total per save). Click **Add task** or **Save changes** to persist additions or removals. Both use the same attachment controls and save actual uploaded file contents.
 
+You can also **drag files into the open task details** or **paste a copied picture into the Details field** with Ctrl+V (⌘V on Mac). PNG, JPEG, GIF, and WebP images appear as previews below Details; click a preview to enlarge or shrink it. Pictures remain attached files, while the description stays editable as plain text. The **Files and links** list lets you open, download, or remove them. Files added by dropping or pasting use the same limits and are saved only when you click **Add task** or **Save changes**; cancelling discards unsaved additions. Ordinary text pasting continues to work. For folders, use **Add link** instead of dropping the folder.
+
 The single list shows clickable web links and file downloads. PDFs, supported images, and text files also have an **Open** preview link. Local folders have a folder link and **Copy path**: browsers may block `file://` navigation from a web page, so paste the copied path into your file manager when needed. Folder paths refer to the viewer’s computer or network; they do not upload a folder to the server.
 
 Old entries that contain only a filename without a saved file are marked unavailable and need to be uploaded again. Removing an attachment from a ticket removes its reference; the stored file is retained on disk.
