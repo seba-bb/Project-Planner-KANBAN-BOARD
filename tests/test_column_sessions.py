@@ -52,6 +52,42 @@ def declare_test_component(*args, **kwargs):
     def board(self, app):
         return json.loads(re.search(r'const data = (.*);\n', app.session_state.test_board_html)[1])
 
+    def test_task_link_opens_saved_ticket_and_clears_conflicting_filters(self):
+        app = self.session()
+        task_id = self.board(app)['tasks'][0]['id']
+        app.text_input(key='filter_keyword').set_value('no matching ticket').run(timeout=15)
+        self.assertEqual(self.board(app)['tasks'], [])
+        app.session_state.show_statistics = True
+        app.query_params['task'] = task_id
+        app.run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertEqual(self.board(app)['open_task_id'], task_id)
+        self.assertIn(task_id, [task['id'] for task in self.board(app)['tasks']])
+        self.assertEqual(app.text_input(key='filter_keyword').value, '')
+        self.assertFalse(app.session_state.show_statistics)
+        app.run(timeout=15)
+        self.assertIsNone(self.board(app)['open_task_id'], 'ordinary reruns must not reopen a closed task')
+        fresh = AppTest.from_file(str(self.app_path))
+        fresh.query_params['task'] = task_id
+        fresh.run(timeout=15)
+        self.assertFalse(fresh.exception)
+        self.assertEqual(self.board(fresh)['open_task_id'], task_id)
+
+    def test_missing_and_archived_task_links_show_explanation(self):
+        app = self.session()
+        task_id = self.board(app)['tasks'][0]['id']
+        self.event(app, event_id='archive-linked-ticket', action='archive_task', task_id=task_id)
+        app.query_params['task'] = task_id
+        app.run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertIsNone(self.board(app)['open_task_id'])
+        self.assertTrue(any('archived' in warning.value for warning in app.warning))
+        app.query_params['task'] = 'does-not-exist'
+        app.run(timeout=15)
+        self.assertFalse(app.exception)
+        self.assertIsNone(self.board(app)['open_task_id'])
+        self.assertTrue(any('could not be found' in warning.value for warning in app.warning))
+
     def test_status_filter_does_not_hide_previously_added_columns(self):
         app = self.session()
         original = app.session_state.statuses.copy()

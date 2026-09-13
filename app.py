@@ -34,7 +34,7 @@ DEFAULT_PROJECT_COLORS = [
     "#ca8a04",
     "#475569",
 ]
-DEFAULT_USERS = ["sebastian.stasica@die-tech.biz"]
+DEFAULT_USERS = ["owner@example.com"]
 APP_ICON_PATH = Path(__file__).parent / "assets" / "project_planner_icon.png"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -1310,7 +1310,7 @@ def manage_people_emails_dialog() -> None:
     with st.form("add_people_emails_form"):
         raw_emails = st.text_area(
             "Add emails",
-            placeholder="one.person@company.com, another.person@company.com",
+            placeholder="one.person@example.com, another.person@example.com",
         )
         add_emails_submitted = st.form_submit_button("Add emails")
 
@@ -1332,7 +1332,7 @@ def manage_people_emails_dialog() -> None:
             st.rerun()
         st.error(message)
 
-def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
+def build_board_html(statuses: list[str], tasks: list[dict[str, str]], open_task_id: str | None = None) -> str:
     # Streamlit does not provide a native Planner-style drag-and-drop board, so
     # this function embeds a small self-contained HTML/CSS/JS app.
     column_settings = load_column_settings()
@@ -1351,6 +1351,7 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
         "column_settings": column_settings,
         "users": st.session_state.users,
         "tasks": board_tasks,
+        "open_task_id": open_task_id,
     }
     payload = json.dumps(board_data).replace("<", "\\u003c")
 
@@ -2221,7 +2222,7 @@ def build_board_html(statuses: list[str], tasks: list[dict[str, str]]) -> str:
                             <div id="responsible-menu" class="responsible-menu">
                                 <div id="responsible-options"></div>
                                 <div class="responsible-add">
-                                    <input id="responsible-new-email" type="email" aria-label="New responsible email" placeholder="name@company.com">
+                                    <input id="responsible-new-email" type="email" aria-label="New responsible email" placeholder="name@example.com">
                                     <button id="responsible-add-email" type="button">Add email</button>
                                 </div>
                                 <div id="responsible-email-error" role="alert"></div>
@@ -2592,7 +2593,7 @@ function addResponsibleEmail() {{
     const email = input.value.trim().toLowerCase();
     const error = document.getElementById("responsible-email-error");
     if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/u.test(email)) {{
-        error.textContent = "Enter a valid email address, for example name@company.com.";
+        error.textContent = "Enter a valid email address, for example name@example.com.";
         input.focus();
         return;
     }}
@@ -3744,6 +3745,7 @@ function renderBoard() {{
 }}
 
 renderBoard();
+if (data.open_task_id) openEditModal(data.open_task_id);
 // Refresh an open board when the date changes or the user returns to the tab.
 setInterval(refreshDueDates, 60000);
 document.addEventListener("visibilitychange", () => {{
@@ -3776,6 +3778,23 @@ if st.session_state.pop("show_task_created_notice", False):
 column_settings = load_column_settings()
 statuses = [name for name in st.session_state.statuses if not column_settings.get(name, {}).get("archived", False)]
 archived_statuses = [name for name in st.session_state.statuses if column_settings.get(name, {}).get("archived", False)]
+open_task_id = None
+requested_task_id = st.query_params.get("task")
+if requested_task_id != st.session_state.get("last_requested_task_id"):
+    st.session_state.last_requested_task_id = requested_task_id
+    if requested_task_id:
+        linked_task = next((task for task in st.session_state.tasks if task["id"] == requested_task_id), None)
+        if linked_task is None:
+            st.warning("This task could not be found. It may have been deleted or the link is incorrect.")
+        elif linked_task.get("archived", False) or linked_task["status"] not in statuses:
+            st.warning("This task is archived or belongs to an archived column. Use Archived items below the board to restore it.")
+            st.session_state.show_calendar = False
+            st.session_state.show_statistics = False
+        else:
+            reset_board_filters()
+            st.session_state.show_calendar = False
+            st.session_state.show_statistics = False
+            open_task_id = requested_task_id
 if "status_filter" not in st.session_state:
     st.session_state.status_filter = statuses.copy()
 project_ids = st.session_state.project_ids
@@ -3847,7 +3866,7 @@ if st.session_state.get("show_statistics", False):
 
 # Filters narrow cards; they must not remove saved columns from the board.
 visible_statuses = statuses.copy()
-board_html = build_board_html(visible_statuses, filtered_tasks)
+board_html = build_board_html(visible_statuses, filtered_tasks, open_task_id=open_task_id)
 kanban_component = components.declare_component(
     "kanban_board", path=str(Path(__file__).parent / "assets" / "kanban_component"),
 )

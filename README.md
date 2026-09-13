@@ -56,6 +56,8 @@ Past due dates appear in red with an **Overdue** label. Dates from today through
 
 Assign responsible people to individual tasks using email addresses. Edit a task to change its assignees or add a new email address directly in the selector.
 
+Fresh installations use `owner@example.com` as a demo placeholder. Replace it with the intended recipient when assigning real tasks.
+
 ### Task Cards
 
 Cards show the task title, labels directly underneath, and then Details. Due dates and assignee initials remain visible; Project ID and project name are not shown on cards. Open the task details or double-click a card to view or edit additional information, including:
@@ -119,9 +121,22 @@ The application starts with sample tasks when no CSV task database exists. Savin
 
 New tasks automatically notify all responsible email addresses after the ticket is saved. A notice above the board reports whether the SMTP server accepted the message, rejected recipients, or could not send it. Mail-server acceptance does not guarantee inbox delivery. Task creation still succeeds if sending fails; notifications are not automatically retried on reload. The CSV records the notification status.
 
-Copy [the SMTP example](.streamlit/secrets.toml.example) to `.streamlit/secrets.toml`, then enter your SMTP host, port, sender address, encryption mode, and credentials if your server requires login. The real secrets file is ignored by Git. `starttls` is the default; `ssl` and an explicitly configured `none` mode for a trusted relay are also supported. `app_url` adds a link to your board in the notification.
+Copy [the SMTP example](.streamlit/secrets.toml.example) to `.streamlit/secrets.toml`, then enter your SMTP host, port, sender address, encryption mode, and credentials if your server requires login. The real secrets file is ignored by Git. `starttls` is the default; `ssl` and an explicitly configured `none` mode for a trusted relay are also supported. Set the required `app_url` to the deployed board address reachable by recipients, such as `https://planner.example.com`. Notifications append `?task=<ticket-id>` to open that saved task directly. Deployment subpaths and other query parameters are preserved.
 
-Alternatively, configure `PP_SMTP_HOST`, `PP_SMTP_PORT`, `PP_SMTP_FROM_EMAIL`, `PP_SMTP_SECURITY`, `PP_SMTP_USERNAME`, `PP_SMTP_PASSWORD`, and `PP_SMTP_APP_URL` in the server environment. Environment variables override the secrets file. Without a configured host and sender, the app saves the ticket and displays that email was not sent.
+Alternatively, configure `PP_SMTP_HOST`, `PP_SMTP_PORT`, `PP_SMTP_FROM_EMAIL`, `PP_SMTP_SECURITY`, `PP_SMTP_USERNAME`, `PP_SMTP_PASSWORD`, and `PP_SMTP_APP_URL` in the server environment. Environment variables override the secrets file. Without a configured host, sender, and application URL, the app saves the ticket and displays that email was not sent. Invalid application URLs fail notification delivery without losing the task.
+
+Opening a task link switches to the board, clears conflicting filters, and opens the task form. Closing or saving the form does not reopen it on ordinary reruns; opening the link in a fresh session opens it again. Missing or archived tickets show an explanation instead. Opening a link does not send another notification.
+
+### Beta notification acceptance check
+
+1. Deploy the updated app to the beta host with persistent task storage. Back up its CSV, board settings, labels, and attachments before testing. Confirm testers can reach the board from their own devices.
+2. Configure SMTP and `app_url` on that host using the example above. Use the beta address, not `localhost`; supply credentials through the ignored secrets file or server environment.
+3. Create a task with a distinctive title, description, due date, and a consenting tester's address under **Responsible people**. Confirm the task saves and the app reports mail-server acceptance. Check the actual inbox and spam folder; acceptance alone is not a delivery test.
+4. Open the email's **Open task** link on the tester's device. Confirm the correct task form opens with the saved details. Repeat with two responsible people and confirm both receive the notification.
+5. Close the form, reload the board, and edit the task. Confirm these actions do not send another new-task email. Test an unknown task ID and an archived task link for a clear explanation.
+6. In an isolated test deployment, use invalid SMTP credentials and create a task. Confirm it remains saved and the app reports the notification failure. Restore working credentials before inviting testers.
+
+Automated checks: `.venv/bin/python -m unittest discover -s tests`; for browser DOM checks, run `npm ci` and `npm test` in `tests/ui`. These tests mock mail delivery; the inbox/link check above is required before declaring this feature ready for beta. Automatic retries remain unimplemented, so monitor notification failures during beta and follow up manually rather than creating duplicate tasks.
 
 Notifications for assignment changes on existing tasks and new comments are planned below; they are not implemented yet.
 

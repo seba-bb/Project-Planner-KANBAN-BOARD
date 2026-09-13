@@ -114,7 +114,7 @@ The static prototype should also include an Add task button at the top of the bo
 - Double-clicking an existing task card should open a similar small edit window.
 - The edit window should allow changing task title, project ID, project name, responsible row or role, responsible email, column/status, due date, details, and attached file names.
 - The edit window should stay visible within the current board viewport without requiring page scrolling.
-- The user list should include `sebastian.stasica@die-tech.biz` for the prototype.
+- The user list should include `owner@example.com` for the prototype.
 - Email notification in the static prototype should prepare an email draft for the responsible person; SMTP sending can be added in the backend phase.
 
 Board filters:

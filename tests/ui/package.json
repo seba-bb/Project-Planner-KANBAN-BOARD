@@ -2,7 +2,7 @@
   "name": "planner-ui-tests",
   "private": true,
   "scripts": {
-    "test": "../../.venv/bin/python render_board.py | node column_creator.test.js && ../../.venv/bin/python render_board.py | node column_actions.test.js && ../../.venv/bin/python render_board.py | node task_drag.test.js && ../../.venv/bin/python render_board.py | node details_upload.test.js"
+    "test": "../../.venv/bin/python render_board.py | node column_creator.test.js && ../../.venv/bin/python render_board.py | node column_actions.test.js && ../../.venv/bin/python render_board.py | node task_drag.test.js && ../../.venv/bin/python render_board.py | node details_upload.test.js && ../../.venv/bin/python render_board.py | node task_link.test.js"
   },
   "devDependencies": {
     "jsdom": "29.1.1"

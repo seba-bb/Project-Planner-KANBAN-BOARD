@@ -11,7 +11,7 @@ CMDB (Configuration Management Database) to rejestr elementów konfiguracji apli
 | Repozytorium | [seba-bb/Project-Planner-KANBAN-BOARD](https://github.com/seba-bb/Project-Planner-KANBAN-BOARD) |
 | Gałąź | `master` |
 | Wersja kodu objęta opisem | `95f62b103b971fdd07a63fce4a7180263efb0833` |
-| Sprawdzone środowisko | Lokalny katalog `/home/sebastian/Projekty/PP` |
+| Sprawdzone środowisko | Lokalny katalog `<app-directory>` |
 | Właściciel biznesowy | Do ustalenia |
 | Właściciel techniczny | Do ustalenia |
 | Serwer produkcyjny, adres usługi i administrator serwera | Niepotwierdzone |
@@ -34,7 +34,7 @@ CSV używają przecinka jako separatora i kodowania UTF-8 z BOM. Można je impor
 | PP-APP-001 | Backend i formularze | [app.py](app.py) | W Git |
 | PP-UI-001 | Tablica HTML/CSS/JavaScript | `build_board_html()` w `app.py` | Generowana przez aplikację |
 | PP-CMP-001 | Komunikacja tablicy ze Streamlit | [index.html](assets/kanban_component/index.html) | Komponent v1, `postMessage` |
-| PP-ENV-001 | Lokalne środowisko PP | `/home/sebastian/Projekty/PP` | Potwierdzone lokalnie |
+| PP-ENV-001 | Lokalne środowisko PP | `<app-directory>` | Potwierdzone lokalnie |
 | PP-RTE-001 | Python w `.venv` | `.venv/bin/python`, Python **3.12.3** | Zainstalowany |
 | PP-PKG-001 | Streamlit | Lokalnie **1.63.0** | Rozbieżność z deklaracją zależności |
 | PP-CFG-001 | Deklaracja zależności | [requirements.txt](requirements.txt): **1.60.0** | W Git |
@@ -81,7 +81,7 @@ Diagram pokazuje główne połączenia. Pełny rejestr relacji znajduje się w `
 | Filtry i obsługa formularzy | `st.session_state` | Stan danej sesji |
 | Opcje kolumn, ról, projektów, osób i kolory | Wartości domyślne oraz stan sesji | Część opcji odtwarzana z ticketów; osobny trwały rejestr ustawień nie istnieje |
 
-Pełna lokalna ścieżka bazy zadań: `/home/sebastian/Projekty/PP/project_planner_actions.csv`.
+Pełna lokalna ścieżka bazy zadań: `<app-directory>/project_planner_actions.csv`.
 
 `attachments/` jest lokalizacją przewidzianą w kodzie. Nie należy traktować obecności funkcji uploadu jako potwierdzenia istnienia konkretnych przesłanych plików.
 

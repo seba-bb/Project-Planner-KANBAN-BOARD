@@ -5,6 +5,17 @@ import smtplib
 import ssl
 import tomllib
 from email.message import EmailMessage
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+
+def task_url(app_url: str, task_id: str) -> str:
+    """Keep deployment paths/query options while linking to a stable ticket ID."""
+    url = urlsplit(app_url.strip())
+    if url.scheme not in {'http', 'https'} or not url.hostname or not task_id:
+        raise ValueError('A valid application URL and task ID are required')
+    query = [(key, value) for key, value in parse_qsl(url.query, keep_blank_values=True) if key != 'task']
+    query.append(('task', task_id))
+    return urlunsplit((url.scheme, url.netloc, url.path, urlencode(query), ''))
 
 
 def smtp_settings() -> dict:
@@ -23,6 +34,9 @@ def send_new_task_notification(task: dict) -> dict[str, str]:
         settings = smtp_settings()
         if not settings.get('host') or not settings.get('from_email'):
             return {'status': 'not_configured', 'message': 'Task saved. Email was not sent: configure the SMTP sender in .streamlit/secrets.toml or PP_SMTP_* environment variables.'}
+        if not settings.get('app_url'):
+            return {'status': 'not_configured', 'message': 'Task saved. Email was not sent: configure smtp.app_url or PP_SMTP_APP_URL so the notification can link to the task.'}
+        link = task_url(settings['app_url'], task.get('id', ''))
         security = settings.get('security', 'starttls')
         if security not in {'starttls', 'ssl', 'none'}:
             raise ValueError('Invalid SMTP security mode')
@@ -33,8 +47,7 @@ def send_new_task_notification(task: dict) -> dict[str, str]:
         message['From'] = settings['from_email']
         message['To'] = ', '.join(recipients)
         body = f"You have been assigned a new task.\n\nTask: {task['title']}\nStatus: {task['status']}\nDue date: {task['due']}\n\nDetails:\n{task['description']}\n"
-        if settings.get('app_url'):
-            body += f"\nOpen Project Planner: {settings['app_url']}\n"
+        body += f"\nOpen task: {link}\n"
         message.set_content(body)
         context = ssl.create_default_context()
         options = {'host': settings['host'], 'port': port, 'timeout': 10}

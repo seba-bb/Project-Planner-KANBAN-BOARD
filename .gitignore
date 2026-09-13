@@ -2,6 +2,8 @@
 *.py[cod]
 .streamlit/secrets.toml
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 project_planner_actions.csv
